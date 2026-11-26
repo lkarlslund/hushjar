@@ -365,6 +365,37 @@ also opens as a small popup from the Generate button on hidden fields.
 - **M5 – Other platforms.** Windows and macOS packaging, then Android with a
   single-pane layout.
 
+## Status (26 November 2026)
+
+Every milestone from M0 to M5 is built. What is tested and what is not:
+
+- **Tested against Vaultwarden 1.37.3** (the fixture in `tests/interop`):
+  sign-in with both key derivations, authenticator and security-key two-step
+  login (the latter with a software authenticator), log in with a device and
+  approving it, PIN unlock, offline unlock, sync and live updates, every item
+  type, editing, trash, folders, archive, passkey removal, moving items to an
+  organisation, attachments, text and file Sends with their links, import and
+  export in every format, and organisation policies.
+- **Built but not tried for real:**
+  - bitwarden.com and bitwarden.eu (the client ID `hushjar` may be refused);
+  - YubiKey OTP, a USB security key, and new-device codes (Vaultwarden does
+    not ask for them);
+  - Azure uploads, which bitwarden.com uses for files;
+  - the polkit dialog for system authentication (install the rule first; see
+    `scripts/install-desktop.sh`);
+  - Windows and macOS: they cross-check, but they have never been built or
+    run there, and CI has not run yet.
+- **Platform gaps:**
+  - The tray, start on login, notifications and system authentication are
+    Linux only. Windows Hello and Touch ID are not done.
+  - Android has no file dialogs (so no import, export, attachments or file
+    Sends), no SSH agent, and copied secrets are not marked as sensitive.
+  - The "sign in again" card for an expired session takes only a typed
+    two-step code.
+- **Not started:** everything marked "Later" or "Maybe" in the checklist
+  above, for example Duo, single sign-on, website icons, email alias
+  services, languages, the browser extension and the Secret Service provider.
+
 ## Platform notes
 
 - **Wayland:** windows cannot place themselves, so position and size are left
