@@ -14,6 +14,7 @@ use crate::api::{
 };
 use crate::crypto::{self, CryptoError, HashPurpose, PrivateKey, SymmetricKey};
 use crate::exchange::import::{self, ImportSummary, ParsedImport};
+use crate::policy::Policies;
 use crate::send::{self, SendEntry, SendFile, SendKind};
 use crate::store::{Profile, Store};
 use crate::vault::{self, Item, Keys, Vault, VaultError};
@@ -310,6 +311,18 @@ impl Session {
             }
             Err(other) => Err(other.into()),
         }
+    }
+
+    /// A current access token, refreshed first when it is about to expire;
+    /// for connections the session does not make itself, such as the
+    /// notification [`Listener`](crate::notifications::Listener).
+    pub fn access_token(&mut self) -> Result<Zeroizing<String>, SessionError> {
+        self.token()
+    }
+
+    /// The organisation policies that apply to this user, from the last sync.
+    pub fn policies(&self) -> Policies {
+        Policies::from_sync(&self.sync)
     }
 
     /// Runs an authenticated request, retrying once with a fresh token if the

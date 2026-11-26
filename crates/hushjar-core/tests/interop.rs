@@ -509,3 +509,277 @@ fn seed_demo_account() {
     session.sync(&store).unwrap();
     println!("DEMO {email} / {password}");
 }
+
+mod live_updates {
+    use super::*;
+    use hushjar_core::notifications::{Listener, Notification};
+    use hushjar_core::session::Session;
+    use hushjar_core::store::Store;
+    use hushjar_core::vault::{Item, ItemKind};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    const PASSWORD: &str = "invented interop password";
+
+    fn temp_store() -> (Store, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("hushjar-interop-{}", uuid::Uuid::new_v4().simple()));
+        (Store::open(dir.clone()).unwrap(), dir)
+    }
+
+    fn note(name: &str) -> Item {
+        let mut item = Item::new(ItemKind::SecureNote, None, None);
+        item.name = name.into();
+        item.notes = "invented".into();
+        item
+    }
+
+    #[test]
+    fn changes_from_another_device_arrive() {
+        let Some(base) = server() else { return };
+        let email = unique_email("live");
+        register(
+            &base,
+            &email,
+            PASSWORD,
+            Kdf::Pbkdf2 {
+                iterations: 600_000,
+            },
+        );
+        let server = Server::parse(&base).unwrap();
+        // Device 1: this installation, listening.
+        let (store, dir) = temp_store();
+        let mut session =
+            Session::sign_in(&store, server.clone(), &email, PASSWORD, None, None).unwrap();
+        let token = session.access_token().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let listener = Listener::start(
+            &server,
+            &session.profile.device.identifier,
+            move || Some(token.clone()),
+            move |event| {
+                let _ = tx.send(event);
+            },
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !listener.is_connected() {
+            assert!(
+                Instant::now() < deadline,
+                "no hub connection: {:?}",
+                listener.problem()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // Our own change carries our device identifier and is ignored.
+        session.save(&store, &note("Mine")).unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)).ok(),
+            None,
+            "own change ignored"
+        );
+
+        // Device 2: a second sign-in of the same account changes an item.
+        let (store2, dir2) = temp_store();
+        let mut other = Session::sign_in(&store2, server, &email, PASSWORD, None, None).unwrap();
+        assert_ne!(
+            other.profile.device.identifier,
+            session.profile.device.identifier
+        );
+        let started = Instant::now();
+        other.save(&store2, &note("Theirs")).unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)).ok(),
+            Some(Notification::VaultChanged)
+        );
+        eprintln!("notification after {:?}", started.elapsed());
+        // Exactly one message for one change.
+        assert_eq!(rx.recv_timeout(Duration::from_millis(500)).ok(), None);
+
+        let started = Instant::now();
+        listener.stop();
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "stop took {:?}",
+            started.elapsed()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(dir2).unwrap();
+    }
+}
+
+mod organisation_policies {
+    use super::*;
+    use hushjar_core::policy::{GeneratorType, Policies, kind};
+    use hushjar_core::session::Session;
+    use hushjar_core::store::Store;
+
+    const PASSWORD: &str = "invented interop password";
+
+    fn account(base: &str, tag: &str) -> (Session, Store, std::path::PathBuf, SymmetricKey) {
+        let email = unique_email(tag);
+        let user_key = register(
+            base,
+            &email,
+            PASSWORD,
+            Kdf::Pbkdf2 {
+                iterations: 600_000,
+            },
+        );
+        let dir =
+            std::env::temp_dir().join(format!("hushjar-interop-{}", uuid::Uuid::new_v4().simple()));
+        let store = Store::open(dir.clone()).unwrap();
+        let session = Session::sign_in(
+            &store,
+            Server::parse(base).unwrap(),
+            &email,
+            PASSWORD,
+            None,
+            None,
+        )
+        .unwrap();
+        (session, store, dir, user_key)
+    }
+
+    /// Sends an authenticated API request as `session`'s user.
+    fn call(base: &str, session: &mut Session, method: &str, path: &str, body: Value) -> Value {
+        let token = session.access_token().unwrap();
+        let url = format!("{base}/api{path}");
+        let bearer = format!("Bearer {}", token.as_str());
+        let response = match method {
+            "GET" => ureq::get(&url).header("Authorization", &bearer).call(),
+            "POST" => ureq::post(&url)
+                .header("Authorization", &bearer)
+                .send_json(&body),
+            "PUT" => ureq::put(&url)
+                .header("Authorization", &bearer)
+                .send_json(&body),
+            _ => unreachable!(),
+        };
+        let mut response = response.unwrap_or_else(|e| panic!("{method} {path}: {e}"));
+        let text = response.body_mut().read_to_string().unwrap();
+        serde_json::from_str(&text).unwrap_or(Value::Null)
+    }
+
+    #[test]
+    fn policies_reach_members_and_spare_owners() {
+        let Some(base) = server() else { return };
+        let (mut owner, owner_store, owner_dir, owner_key) = account(&base, "org-owner");
+        let (mut member, member_store, member_dir, _) = account(&base, "org-member");
+
+        // The keys are placeholders: Vaultwarden stores them unchecked and
+        // policies do not depend on them.
+        let body = json!({
+            "name": "Invented policy org",
+            "billingEmail": owner.profile.email,
+            "collectionName": owner_key.encrypt_str("Default"),
+            "key": "4.cGxhY2Vob2xkZXI=",
+            "planType": 0,
+        });
+        let org = call(&base, &mut owner, "POST", "/organizations", body);
+        let org_id = org["id"].as_str().expect("organisation id").to_string();
+        call(
+            &base,
+            &mut owner,
+            "POST",
+            &format!("/organizations/{org_id}/users/invite"),
+            json!({
+                "emails": [member.profile.email],
+                "groups": [],
+                "type": 2,
+                "collections": [],
+                "permissions": {},
+            }),
+        );
+        let users = call(
+            &base,
+            &mut owner,
+            "GET",
+            &format!("/organizations/{org_id}/users"),
+            Value::Null,
+        );
+        let membership = users["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["email"] == json!(member.profile.email))
+            .expect("member listed");
+        // Without mail, Vaultwarden accepts invitations of existing users.
+        assert_eq!(membership["status"], json!(1));
+        let membership_id = membership["id"].as_str().unwrap().to_string();
+        call(
+            &base,
+            &mut owner,
+            "POST",
+            &format!("/organizations/{org_id}/users/{membership_id}/confirm"),
+            json!({ "key": "4.cGxhY2Vob2xkZXI=" }),
+        );
+
+        let mut set = |kind: u8, data: Value| {
+            call(
+                &base,
+                &mut owner,
+                "PUT",
+                &format!("/organizations/{org_id}/policies/{kind}"),
+                json!({ "policy": { "enabled": true, "data": data } }),
+            );
+        };
+        set(
+            kind::PASSWORD_GENERATOR,
+            json!({
+                "overridePasswordType": "passphrase", "minLength": 18, "useUpper": true,
+                "useLower": true, "useNumbers": true, "useSpecial": false, "minNumbers": 2,
+                "minSpecial": 0, "minNumberWords": 5, "capitalize": true, "includeNumber": true,
+            }),
+        );
+        set(kind::ORGANIZATION_DATA_OWNERSHIP, Value::Null);
+        set(kind::DISABLE_SEND, Value::Null);
+        set(kind::SEND_OPTIONS, json!({ "disableHideEmail": true }));
+        // Vaultwarden 1.37.3 rejects the maximum vault timeout (9) and
+        // personal export (10) policies as not supported; unit tests cover them.
+        set(kind::REMOVE_UNLOCK_WITH_PIN, Value::Null);
+        set(kind::RESTRICTED_ITEM_TYPES, json!([3]));
+
+        // The membership fields policies depend on, as the server sends them.
+        let raw = call(&base, &mut member, "GET", "/sync", Value::Null);
+        let membership = &raw["profile"]["organizations"][0];
+        eprintln!(
+            "membership {} policy {}",
+            serde_json::to_string(&shape(membership)).unwrap(),
+            serde_json::to_string(&raw["policies"][0]).unwrap()
+        );
+        assert_eq!(membership["type"], json!(2));
+        assert_eq!(membership["status"], json!(2));
+        assert_eq!(membership["enabled"], json!(true));
+        assert_eq!(membership["usePolicies"], json!(true));
+        member.sync(&member_store).unwrap();
+        let policies: Policies = member.policies();
+        let generator = policies.generator.clone().expect("generator policy");
+        assert_eq!(generator.forced_type, Some(GeneratorType::Passphrase));
+        assert_eq!(generator.min_length, 18);
+        assert_eq!(generator.min_words, 5);
+        assert!(generator.use_upper && generator.capitalize && generator.include_number);
+        assert!(policies.personal_ownership_disabled);
+        assert!(policies.send_disabled);
+        assert!(policies.send_hide_email_disabled);
+        assert!(policies.pin_unlock_disabled);
+        assert_eq!(policies.restricted_item_types.len(), 1);
+        assert_eq!(policies.restricted_item_types[0].item_type, 3);
+        assert!(policies.restricted_item_types[0].allowed_in.is_empty());
+        assert_eq!(policies.enforced[&kind::DISABLE_SEND], vec![org_id.clone()]);
+
+        // The owner gets the generator policy but is exempt from the rest.
+        owner.sync(&owner_store).unwrap();
+        let policies = owner.policies();
+        assert_eq!(policies.generator.map(|g| g.min_length), Some(18));
+        assert!(!policies.personal_ownership_disabled);
+        assert!(!policies.send_disabled);
+        assert!(!policies.send_hide_email_disabled);
+        // These two exempt no one.
+        assert!(policies.pin_unlock_disabled);
+        assert_eq!(policies.restricted_item_types.len(), 1);
+
+        std::fs::remove_dir_all(owner_dir).unwrap();
+        std::fs::remove_dir_all(member_dir).unwrap();
+    }
+}

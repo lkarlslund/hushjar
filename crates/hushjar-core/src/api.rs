@@ -137,6 +137,19 @@ impl Server {
         })
     }
 
+    /// The base address of the server's notification service, which pushes
+    /// vault changes over a websocket at `<base>/hub`. Bitwarden's cloud runs
+    /// it on its own host; self-hosted servers serve it under
+    /// `/notifications`. Derived rather than stored, so saved profiles need no
+    /// new field.
+    pub fn notifications(&self) -> String {
+        if let Some(region) = self.api.strip_prefix("https://api.bitwarden.") {
+            return format!("https://notifications.bitwarden.{region}");
+        }
+        let base = self.api.strip_suffix("/api").unwrap_or(&self.api);
+        format!("{base}/notifications")
+    }
+
     /// Which Bitwarden cloud region this is, if any.
     fn cloud_region(&self) -> Option<&'static str> {
         match self.api.as_str() {
@@ -1012,6 +1025,21 @@ mod tests {
             "plain http only for loopback"
         );
         assert!(Server::parse("https://user@vault.example.org").is_err());
+    }
+
+    #[test]
+    fn notification_addresses() {
+        let at = |input: &str| Server::parse(input).unwrap().notifications();
+        assert_eq!(at("bitwarden.com"), "https://notifications.bitwarden.com");
+        assert_eq!(at("bitwarden.eu"), "https://notifications.bitwarden.eu");
+        assert_eq!(
+            at("vault.example.org/bw"),
+            "https://vault.example.org/bw/notifications"
+        );
+        assert_eq!(
+            at("http://127.0.0.1:18281"),
+            "http://127.0.0.1:18281/notifications"
+        );
     }
 
     #[test]

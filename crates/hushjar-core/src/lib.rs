@@ -8,6 +8,8 @@ pub mod crypto;
 pub mod exchange;
 pub mod fingerprint;
 pub mod generator;
+pub mod notifications;
+pub mod policy;
 pub mod send;
 pub mod session;
 pub mod store;
