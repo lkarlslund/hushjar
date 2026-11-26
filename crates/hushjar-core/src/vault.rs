@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use crate::api::{field, field_str, field_u64};
-use crate::crypto::{PrivateKey, SymmetricKey};
+use crate::crypto::{EncString, PrivateKey, SymmetricKey};
 use crate::send::{self, SendEntry};
 
 /// Shown in place of a value that could not be decrypted.
@@ -29,6 +29,11 @@ pub enum VaultError {
     ReadOnlyType,
     #[error("an encrypted value could not be decrypted")]
     Unreadable,
+    #[error(
+        "this item has an attachment from an old version of Bitwarden that cannot be moved; \
+         download and delete it first"
+    )]
+    LegacyAttachment,
     #[error("a file Send needs a file name")]
     MissingFileName,
 }
@@ -125,6 +130,23 @@ pub struct Login {
     pub uris: Vec<Uri>,
     #[zeroize(skip)]
     pub passkeys: usize,
+    /// What can be shown about each stored passkey. The key material is
+    /// never decrypted; it stays in [`Item::raw`] and is sent back as is.
+    pub passkey_details: Vec<Passkey>,
+}
+
+/// A passkey (FIDO2 credential) stored on a login, read-only.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Zeroize)]
+pub struct Passkey {
+    /// Identifies the passkey for [`remove_passkey`].
+    pub credential_id: String,
+    pub rp_id: String,
+    pub rp_name: String,
+    pub user_name: String,
+    pub user_display_name: String,
+    /// When it was created, as the server stores it.
+    #[zeroize(skip)]
+    pub created: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Zeroize)]
@@ -520,10 +542,29 @@ pub fn decrypt_item(raw: &Value, keys: &Keys) -> Item {
             });
         }
     }
-    item.login.passkeys = login
+    if let Some(list) = login
         .and_then(|l| field(l, "fido2Credentials"))
         .and_then(Value::as_array)
-        .map_or(0, Vec::len);
+    {
+        item.login.passkeys = list.len();
+        for credential in list {
+            // Unreadable passkey text is not counted: saving never rewrites it.
+            let mut names = Reader {
+                key: key.as_ref(),
+                unreadable: 0,
+            };
+            item.login.passkey_details.push(Passkey {
+                credential_id: names.get(Some(credential), "credentialId"),
+                rp_id: names.get(Some(credential), "rpId"),
+                rp_name: names.get(Some(credential), "rpName"),
+                user_name: names.get(Some(credential), "userName"),
+                user_display_name: names.get(Some(credential), "userDisplayName"),
+                created: field_str(credential, "creationDate")
+                    .unwrap_or_default()
+                    .to_string(),
+            });
+        }
+    }
 
     let card = field(raw, "card").filter(|v| v.is_object());
     item.card = Card {
@@ -646,6 +687,12 @@ pub fn encrypt_item(item: &Item, keys: &Keys) -> Result<Value, VaultError> {
     if let Some(revision) = field_str(raw, "revisionDate") {
         body.insert("lastKnownRevisionDate".into(), json!(revision));
     }
+    // Vaultwarden unarchives an item whose update carries no archive date,
+    // so the current one is always sent back.
+    body.insert(
+        "archivedDate".into(),
+        field(raw, "archivedDate").cloned().unwrap_or(Value::Null),
+    );
     for name in ["login", "card", "identity", "secureNote", "sshKey"] {
         body.insert(name.into(), Value::Null);
     }
@@ -733,6 +780,138 @@ pub fn encrypt_item(item: &Item, keys: &Keys) -> Result<Value, VaultError> {
         .collect();
     body.insert("passwordHistory".into(), Value::Array(history));
     Ok(Value::Object(body))
+}
+
+/// Removes the passkey with `credential_id` from the item's original JSON
+/// and from its list of passkeys, so the next save drops it and keeps the
+/// others unchanged. Returns whether a passkey was found.
+pub fn remove_passkey(item: &mut Item, credential_id: &str) -> bool {
+    let Some(position) = item
+        .login
+        .passkey_details
+        .iter()
+        .position(|p| p.credential_id == credential_id)
+    else {
+        return false;
+    };
+    let Some(login) = item.raw.as_object_mut().and_then(|o| {
+        o.iter_mut()
+            .find(|(k, _)| k.eq_ignore_ascii_case("login"))
+            .map(|(_, v)| v)
+    }) else {
+        return false;
+    };
+    let Some(list) = login.as_object_mut().and_then(|o| {
+        o.iter_mut()
+            .find(|(k, _)| k.eq_ignore_ascii_case("fido2Credentials"))
+            .and_then(|(_, v)| v.as_array_mut())
+    }) else {
+        return false;
+    };
+    if position >= list.len() {
+        return false;
+    }
+    list.remove(position);
+    item.login.passkey_details.remove(position);
+    item.login.passkeys = list.len();
+    true
+}
+
+/// Re-encrypts every encrypted string in `value` from one key to another.
+fn recrypt(value: &mut Value, from: &SymmetricKey, to: &SymmetricKey) -> Result<(), VaultError> {
+    match value {
+        Value::String(text) => {
+            if let Ok(parsed @ EncString::AesCbcHmac { .. }) = text.parse::<EncString>() {
+                let plain = from.decrypt(&parsed).map_err(|_| VaultError::Unreadable)?;
+                *text = to.encrypt(&plain).to_string();
+            }
+        }
+        Value::Array(list) => {
+            for entry in list {
+                recrypt(entry, from, to)?;
+            }
+        }
+        Value::Object(map) => {
+            for entry in map.values_mut() {
+                recrypt(entry, from, to)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Builds the request that moves a personal item into an organisation.
+///
+/// As in the Bitwarden clients, an item with its own key keeps its fields
+/// and attachments and only has that key re-wrapped with the organisation
+/// key. An older item without one gets a new item key: every field is
+/// re-encrypted with it, and attachment keys and names are re-wrapped to it.
+/// Attachments from before per-file keys cannot be re-wrapped, so the item
+/// is refused. The result is the `cipher` part of the share request.
+pub fn share_body(item: &Item, keys: &Keys, organization: &str) -> Result<Value, VaultError> {
+    let org_key = keys
+        .organizations
+        .get(organization)
+        .ok_or(VaultError::MissingKey)?;
+    if item.attachments.iter().any(|a| {
+        field(&item.raw, "attachments")
+            .and_then(Value::as_array)
+            .and_then(|list| {
+                list.iter()
+                    .find(|x| field_str(x, "id") == Some(a.id.as_str()))
+            })
+            .and_then(|x| field_str(x, "key"))
+            .is_none()
+    }) {
+        return Err(VaultError::LegacyAttachment);
+    }
+    let old_key = item_key(&item.raw, keys).ok_or(VaultError::MissingKey)?;
+    let mut moved = item.clone();
+    moved.organization_id = Some(organization.to_string());
+    moved.collection_ids = vec![];
+    let mut cipher = encrypt_item(&moved, keys)?;
+    let mut attachments = Map::new();
+    if field_str(&item.raw, "key").is_some() {
+        cipher["key"] = json!(org_key.wrap_key(&old_key));
+    } else {
+        let new_key = SymmetricKey::generate();
+        let Value::Object(map) = &mut cipher else {
+            return Err(VaultError::Unreadable);
+        };
+        for (name, entry) in map.iter_mut() {
+            if name != "key" {
+                recrypt(entry, &old_key, &new_key)?;
+            }
+        }
+        map.insert("key".into(), json!(org_key.wrap_key(&new_key)));
+        for a in field(&item.raw, "attachments")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let (Some(id), Some(name), Some(wrapped)) = (
+                field_str(a, "id"),
+                field_str(a, "fileName"),
+                field_str(a, "key"),
+            ) else {
+                return Err(VaultError::LegacyAttachment);
+            };
+            let mut name = json!(name);
+            recrypt(&mut name, &old_key, &new_key)?;
+            let file_key = old_key
+                .unwrap_key(wrapped)
+                .map_err(|_| VaultError::Unreadable)?;
+            attachments.insert(
+                id.to_string(),
+                json!({ "fileName": name, "key": new_key.wrap_key(&file_key) }),
+            );
+        }
+        if !attachments.is_empty() {
+            cipher["attachments2"] = Value::Object(attachments.clone());
+        }
+    }
+    Ok(cipher)
 }
 
 /// The current time as an ISO 8601 UTC timestamp, as Bitwarden uses.
@@ -899,6 +1078,139 @@ mod tests {
         assert!(matches!(
             encrypt_item(&item, &keys),
             Err(VaultError::ReadOnlyType)
+        ));
+    }
+
+    fn passkey(key: &SymmetricKey, id: &str, site: &str) -> Value {
+        json!({
+            "credentialId": key.encrypt_str(id), "keyType": key.encrypt_str("public-key"),
+            "keyValue": key.encrypt_str("not-a-real-key"), "rpId": key.encrypt_str(site),
+            "rpName": key.encrypt_str("Example"), "userName": key.encrypt_str("sam"),
+            "userDisplayName": key.encrypt_str("Sam Example"),
+            "creationDate": "2026-02-03T04:05:06.789Z",
+        })
+    }
+
+    #[test]
+    fn passkeys_are_listed_and_removed_alone() {
+        let keys = keys();
+        let k = &keys.user;
+        let raw = json!({
+            "id": "p", "type": 1, "name": k.encrypt_str("Site"),
+            "login": { "fido2Credentials": [passkey(k, "one", "a.example"), passkey(k, "two", "b.example")] },
+        });
+        let mut item = decrypt_item(&raw, &keys);
+        assert_eq!(item.login.passkeys, 2);
+        let details = &item.login.passkey_details;
+        assert_eq!(details[1].rp_id, "b.example");
+        assert_eq!(details[1].user_display_name, "Sam Example");
+        assert_eq!(details[1].created, "2026-02-03T04:05:06.789Z");
+
+        assert!(!remove_passkey(&mut item, "nope"));
+        assert!(remove_passkey(&mut item, "one"));
+        assert_eq!(item.login.passkeys, 1);
+        assert_eq!(item.login.passkey_details[0].credential_id, "two");
+        let body = encrypt_item(&item, &keys).unwrap();
+        assert_eq!(
+            body["login"]["fido2Credentials"],
+            json!([raw["login"]["fido2Credentials"][1].clone()])
+        );
+    }
+
+    #[test]
+    fn saving_keeps_the_archive_date() {
+        let keys = keys();
+        let raw = json!({
+            "id": "a", "type": 2, "name": keys.user.encrypt_str("Old"),
+            "archivedDate": "2026-03-04T05:06:07.000Z",
+        });
+        let item = decrypt_item(&raw, &keys);
+        assert!(item.archived);
+        let body = encrypt_item(&item, &keys).unwrap();
+        assert_eq!(body["archivedDate"], "2026-03-04T05:06:07.000Z");
+    }
+
+    fn with_org() -> (Keys, SymmetricKey) {
+        let mut keys = keys();
+        let org = SymmetricKey::generate();
+        keys.organizations.insert("org".into(), org.clone());
+        (keys, org)
+    }
+
+    #[test]
+    fn sharing_an_item_with_a_key_only_rewraps_the_key() {
+        let (keys, org) = with_org();
+        let item_key = SymmetricKey::generate();
+        let file_key = SymmetricKey::generate();
+        let raw = json!({
+            "id": "x", "type": 2, "key": keys.user.wrap_key(&item_key),
+            "name": item_key.encrypt_str("Note"), "secureNote": { "type": 0 },
+            "attachments": [{ "id": "a1", "fileName": item_key.encrypt_str("f"), "key": item_key.wrap_key(&file_key) }],
+        });
+        let item = decrypt_item(&raw, &keys);
+        let body = share_body(&item, &keys, "org").unwrap();
+        assert_eq!(body["organizationId"], "org");
+        assert!(body.get("attachments2").is_none());
+        let unwrapped = org.unwrap_key(body["key"].as_str().unwrap()).unwrap();
+        assert_eq!(unwrapped.to_bytes(), item_key.to_bytes());
+        assert_eq!(
+            unwrapped
+                .decrypt_str(body["name"].as_str().unwrap())
+                .unwrap()
+                .as_str(),
+            "Note"
+        );
+    }
+
+    #[test]
+    fn sharing_an_item_without_a_key_gives_it_one() {
+        let (keys, org) = with_org();
+        let k = &keys.user;
+        let file_key = SymmetricKey::generate();
+        let raw = json!({
+            "id": "x", "type": 1, "name": k.encrypt_str("Site"),
+            "login": { "username": k.encrypt_str("sam"), "fido2Credentials": [passkey(k, "one", "a.example")] },
+            "attachments": [{ "id": "a1", "fileName": k.encrypt_str("f.txt"), "key": k.wrap_key(&file_key) }],
+        });
+        let item = decrypt_item(&raw, &keys);
+        let body = share_body(&item, &keys, "org").unwrap();
+        let new_key = org.unwrap_key(body["key"].as_str().unwrap()).unwrap();
+        // The server copy decrypts with the organisation key and the new item key.
+        let mut stored = body.clone();
+        stored["id"] = json!("x");
+        let back = decrypt_item(&stored, &keys);
+        assert_eq!(back.name, "Site");
+        assert_eq!(back.login.username, "sam");
+        assert_eq!(back.login.passkey_details[0].rp_id, "a.example");
+        assert_eq!(back.unreadable, 0);
+        // Its attachment's name and key are re-wrapped to the new item key.
+        let moved = &body["attachments2"]["a1"];
+        assert_eq!(
+            new_key
+                .decrypt_str(moved["fileName"].as_str().unwrap())
+                .unwrap()
+                .as_str(),
+            "f.txt"
+        );
+        let file = new_key.unwrap_key(moved["key"].as_str().unwrap()).unwrap();
+        assert_eq!(file.to_bytes(), file_key.to_bytes());
+    }
+
+    #[test]
+    fn old_style_attachments_block_a_move() {
+        let (keys, _) = with_org();
+        let raw = json!({
+            "id": "x", "type": 2, "name": keys.user.encrypt_str("Note"), "secureNote": { "type": 0 },
+            "attachments": [{ "id": "a1", "fileName": keys.user.encrypt_str("f"), "key": null }],
+        });
+        let item = decrypt_item(&raw, &keys);
+        assert!(matches!(
+            share_body(&item, &keys, "org"),
+            Err(VaultError::LegacyAttachment)
+        ));
+        assert!(matches!(
+            share_body(&item, &keys, "other"),
+            Err(VaultError::MissingKey)
         ));
     }
 
