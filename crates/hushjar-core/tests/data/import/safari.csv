@@ -1,0 +1,3 @@
+Title,URL,Username,Password,Notes,OTPAuth
+example.org,https://example.org,sam,safari-pass-1,Remember me,otpauth://totp/Example:sam?secret=JBSWY3DPEHPK3PXP&issuer=Example
+shop.example.net,https://shop.example.net,riley,safari-pass-2,,

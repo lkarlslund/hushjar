@@ -1,0 +1,5 @@
+name,url,username,password,note
+Example Mail,https://mail.example.org/login,sam@example.org,mail-pass-1,Main mailbox
+,android://c2hhMQ==@com.example.app/,sam,app-pass-2,
+Plain Site,example.net,riley,"pass, with ""quotes""","line one
+line two"

@@ -355,24 +355,30 @@ pub fn master_key(
     email: &str,
     kdf: Kdf,
 ) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+    derive_kdf(password, normalize_email(email).as_bytes(), kdf)
+}
+
+/// Runs the account's key derivation over a password and a salt. For
+/// PBKDF2 the salt is used as given; for Argon2id Bitwarden hashes it with
+/// SHA-256 first. Used with the email as salt for master keys, and with a
+/// random salt for password-protected exports.
+pub fn derive_kdf(
+    password: &str,
+    salt: &[u8],
+    kdf: Kdf,
+) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
     kdf.validate()?;
-    let email = normalize_email(email);
     let mut out = Zeroizing::new([0u8; 32]);
     match kdf {
         Kdf::Pbkdf2 { iterations } => {
-            pbkdf2::pbkdf2_hmac::<Sha256>(
-                password.as_bytes(),
-                email.as_bytes(),
-                iterations,
-                &mut out[..],
-            );
+            pbkdf2::pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, iterations, &mut out[..]);
         }
         Kdf::Argon2id {
             iterations,
             memory_mib,
             parallelism,
         } => {
-            let salt = Sha256::digest(email.as_bytes());
+            let salt = Sha256::digest(salt);
             let params = argon2::Params::new(memory_mib * 1024, iterations, parallelism, Some(32))
                 .map_err(|_| CryptoError::UnsupportedKdf)?;
             argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)

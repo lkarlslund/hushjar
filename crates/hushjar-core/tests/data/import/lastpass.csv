@@ -1,0 +1,16 @@
+url,username,password,totp,extra,name,grouping,fav
+https://example.org,sam,lp-pass-1,JBSWY3DPEHPK3PXP,Some notes,Example,Shopping,1
+https://shop.example.net,riley,lp-pass-2,,,Shop,Shopping,0
+http://sn,,,,"Just a note
+with two lines",Plain note,(none),0
+http://sn,,,,"NoteType:Credit Card
+Name on Card:Sam Example
+Number:4111111111111111
+Security Code:123
+Expiration Date:June,2029
+Notes:Travel card",Travel card,Finance,0
+http://sn,,,,"NoteType:Address
+First Name:Sam
+Last Name:Example
+City / Town:Springfield
+Email Address:sam@example.org",Home address,Finance,0

@@ -13,6 +13,7 @@ use crate::api::{
     field, field_str,
 };
 use crate::crypto::{self, CryptoError, HashPurpose, PrivateKey, SymmetricKey};
+use crate::exchange::import::{self, ImportSummary, ParsedImport};
 use crate::send::{self, SendEntry, SendFile, SendKind};
 use crate::store::{Profile, Store};
 use crate::vault::{self, Item, Keys, Vault, VaultError};
@@ -427,6 +428,39 @@ impl Session {
     pub fn delete(&mut self, store: &Store, id: &str) -> Result<(), SessionError> {
         self.with_token(|c, t| c.delete_cipher(t, id))?;
         self.sync(store)
+    }
+
+    /// The keys that open this account's items, for export and import.
+    pub fn keys(&self) -> &Keys {
+        &self.keys
+    }
+
+    /// Uploads parsed import data as new items, then syncs. Folders that
+    /// already exist by name are reused. Posted once: if the reply is lost
+    /// the result is [`SessionError::SaveUncertain`] and nothing is retried,
+    /// so sync first to see whether it arrived.
+    pub fn import(
+        &mut self,
+        store: &Store,
+        parsed: &ParsedImport,
+    ) -> Result<ImportSummary, SessionError> {
+        if parsed.items.len() > import::MAX_ITEMS {
+            return Err(SessionError::Api(ApiError::Rejected(format!(
+                "an import can hold at most {} items; split the file",
+                import::MAX_ITEMS
+            ))));
+        }
+        let (body, summary) = import::request(parsed, &self.vault, &self.keys)?;
+        let token = self.token()?;
+        match self.client.import_ciphers(&token, &body) {
+            Ok(()) => {}
+            Err(ApiError::Network(_)) | Err(ApiError::Decode) => {
+                return Err(SessionError::SaveUncertain);
+            }
+            Err(other) => return Err(other.into()),
+        }
+        self.sync(store)?;
+        Ok(summary)
     }
 
     pub fn create_folder(&mut self, store: &Store, name: &str) -> Result<String, SessionError> {
