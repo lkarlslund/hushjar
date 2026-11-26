@@ -134,6 +134,8 @@ pub(super) fn account_summary(a: &AccountState) -> AccountSummary {
         "Offline: sign in again to sync".to_string()
     } else if !a.note.is_empty() {
         a.note.clone()
+    } else if let Some(problem) = &a.live_problem {
+        format!("Live updates are not working ({problem})")
     } else {
         relative(a.synced_at)
     };

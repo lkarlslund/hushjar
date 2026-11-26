@@ -2464,6 +2464,8 @@ dependencies = [
  "slint",
  "slint-build",
  "thiserror 2.0.21",
+ "ureq",
+ "uuid",
  "zbus",
  "zeroize",
 ]

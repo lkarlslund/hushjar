@@ -29,6 +29,11 @@ ksni = { version = "0.3", default-features = false, features = ["async-io", "blo
 resvg = { version = "0.49", default-features = false }
 zbus = "5"
 
+[dev-dependencies]
+# For the worker's test against a Vaultwarden test server.
+ureq = { version = "3.5.2", features = ["json"] }
+uuid = { version = "1.29.3", features = ["v4"] }
+
 [build-dependencies]
 embed-resource = "3"
 slint-build.workspace = true

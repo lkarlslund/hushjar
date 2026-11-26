@@ -84,13 +84,10 @@ pub(super) fn render_settings(win: &AppWindow, st: &Shared) {
 
 /// Explains limits that organisation policies put on the timeout.
 fn policy_note(state: &State) -> String {
-    match state.policy_idle_limit() {
-        Some(limit) => format!(
-            "An organisation policy locks accounts after at most {} minutes.",
-            limit.as_secs() / 60
-        ),
-        None => String::new(),
-    }
+    state
+        .policy_idle_limit()
+        .map(timeout_note)
+        .unwrap_or_default()
 }
 
 /// Reads the pane back into the preferences, saves and applies them.

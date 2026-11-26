@@ -143,29 +143,36 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
                 render(win, st);
             }
         }
-        Event::Locked => {
+        Event::Locked => locked(win, st, index),
+        Event::LoggedOutByServer => {
             {
                 let mut state = st.borrow_mut();
-                let a = &mut state.accounts[index];
-                a.view = Account::locked(&a.profile);
-                a.vault = None;
-                a.busy = false;
-                if state.draft.as_ref().is_some_and(|d| d.account == index) {
-                    state.draft = None;
-                }
-                let affected = match &state.shown {
-                    Shown::Item { account, .. } | Shown::Account(account) => *account == index,
-                    Shown::Group(key) => state.row(key).is_some_and(|r| r.account == index),
-                    _ => false,
-                };
-                if affected {
-                    state.shown = Shown::Locked(index);
-                    state.selected = Some(state.accounts[index].profile.id.clone());
-                }
+                state.accounts[index].note =
+                    "Signed out by the server: unlock to sign in again".into();
+                state.generator.forget_history();
             }
-            refresh_tree(win, st);
-            render(win, st);
+            locked(win, st, index);
+            let email = st.borrow().accounts[index].profile.email.clone();
+            toast(
+                win,
+                st,
+                &format!("{email} was signed out by the server. Unlock it to sign in again."),
+            );
             update_sync_text(win, st);
+        }
+        Event::Policies(policies) => {
+            st.borrow_mut().accounts[index].policies = Some(*policies);
+            // The settings and generator panes show what policies require.
+            if matches!(st.borrow().shown, Shown::Settings | Shown::Generator) {
+                render(win, st);
+            }
+        }
+        Event::LoginRequest { .. } => check_login_requests(win, st, index),
+        Event::LiveStatus { problem } => {
+            st.borrow_mut().accounts[index].live_problem = problem;
+            if matches!(st.borrow().shown, Shown::Account(i) if i == index) {
+                render(win, st);
+            }
         }
         Event::Removed => {
             {
@@ -194,6 +201,33 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
         | Event::Imported { .. }
         | Event::TransferFailed { .. }) => handle_transfer_event(win, st, index, event),
     }
+}
+
+/// An account is locked, by the user, a timeout or the server.
+fn locked(win: &AppWindow, st: &Shared, index: usize) {
+    {
+        let mut state = st.borrow_mut();
+        let a = &mut state.accounts[index];
+        a.view = Account::locked(&a.profile);
+        a.vault = None;
+        a.busy = false;
+        a.live_problem = None;
+        if state.draft.as_ref().is_some_and(|d| d.account == index) {
+            state.draft = None;
+        }
+        let affected = match &state.shown {
+            Shown::Item { account, .. } | Shown::Account(account) => *account == index,
+            Shown::Group(key) => state.row(key).is_some_and(|r| r.account == index),
+            _ => false,
+        };
+        if affected {
+            state.shown = Shown::Locked(index);
+            state.selected = Some(state.accounts[index].profile.id.clone());
+        }
+    }
+    refresh_tree(win, st);
+    render(win, st);
+    update_sync_text(win, st);
 }
 
 pub(super) fn handle_sign_in_event(win: &AppWindow, st: &Shared, event: Event) {
@@ -229,6 +263,8 @@ pub(super) fn handle_sign_in_event(win: &AppWindow, st: &Shared, event: Event) {
                     synced_at,
                     note: String::new(),
                     unlock: UnlockOptions::default(),
+                    policies: None,
+                    live_problem: None,
                 });
                 state.expanded.insert(key.clone());
             }

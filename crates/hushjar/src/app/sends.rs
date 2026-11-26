@@ -220,8 +220,11 @@ fn apply_form(send: &mut SendEntry, form: &Form) -> Result<(), String> {
 /// Whether organisation policies stop the user from making or changing
 /// Sends. Policies feed this; while it is true the screen explains why and
 /// disables creating and saving.
-fn send_disabled(_state: &State) -> bool {
-    false
+fn send_disabled(state: &State) -> bool {
+    state
+        .accounts
+        .iter()
+        .any(|a| a.vault.is_some() && a.policies.as_ref().is_some_and(|p| p.send_disabled))
 }
 
 /// A file picked in the dialog, read into memory.
