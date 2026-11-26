@@ -225,7 +225,7 @@ pub struct PasswordEntry {
     pub last_used: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Item {
     pub id: String,
     pub organization_id: Option<String>,
@@ -258,6 +258,16 @@ pub struct Item {
     pub unreadable: usize,
     /// The encrypted item as the server sent it. Empty for new items.
     pub raw: Value,
+}
+
+/// Shows only what identifies the item; its contents are secret.
+impl std::fmt::Debug for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Item")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Item {
