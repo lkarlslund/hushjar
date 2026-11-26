@@ -264,7 +264,17 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
         }
     });
     on!(on_generate, |win, st, section: i32, field: i32| {
-        let password = generate_password();
+        let password = match st.borrow().generator.secret() {
+            Ok(p) => p,
+            Err(message) => {
+                toast(
+                    &win,
+                    st,
+                    &format!("{message} (see the generator's options)"),
+                );
+                return;
+            }
+        };
         let (s_idx, f_idx) = (section as usize, field as usize);
         edit_shown_field(&win, st, s_idx, f_idx, |f| f.value = password.to_string());
         // Re-insert the row so its editor picks up the new value.
@@ -282,6 +292,7 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
                 model.insert(f_idx, to_detail(f, false));
             }
         }
+        st.borrow_mut().generator.remember_secret(&password);
         toast(&win, st, "Generated a new password");
     });
     on!(on_add_field, |win, st, section: i32| {
@@ -546,6 +557,9 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
                 AskMode::FirstTime
             }
         });
+    });
+    on!(on_open_generator, |win, st| {
+        show_generator(&win, st);
     });
     on!(on_open_settings, |win, st| {
         show_settings(&win, st);

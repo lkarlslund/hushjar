@@ -23,6 +23,7 @@ use crate::tree::{self, GroupBy, Row};
 use crate::worker::{Command, Event, Worker};
 mod edit;
 mod events;
+mod generator;
 mod integration;
 mod settings;
 mod sign_in;
@@ -32,6 +33,7 @@ mod wire;
 
 use edit::*;
 use events::*;
+use generator::{Generator, render_generator, show_generator, wire_generator};
 use integration::Integration;
 use settings::*;
 use sign_in::*;
@@ -53,6 +55,7 @@ enum Shown {
     Account(usize),
     SignIn,
     Settings,
+    Generator,
 }
 
 struct Draft {
@@ -76,6 +79,7 @@ enum Pending {
     LockAll,
     NewItem,
     Settings,
+    Generator,
 }
 
 struct AccountState {
@@ -142,6 +146,7 @@ pub struct State {
     /// The desktop's own colour scheme, for the "System" theme.
     system_scheme: slint::language::ColorScheme,
     desktop: Integration,
+    generator: Generator,
 }
 
 type Shared = Rc<RefCell<State>>;
@@ -350,6 +355,7 @@ impl App {
         };
         let ssh_settings = load_ssh_settings(&store);
         let prefs = Prefs::from_settings(&store.read_settings());
+        let generator = Generator::from_settings(&store.read_settings());
         let system_scheme = window.global::<crate::Palette>().get_color_scheme();
         let state: Shared = Rc::new(RefCell::new(State {
             store,
@@ -377,6 +383,7 @@ impl App {
             prefs,
             system_scheme,
             desktop: Integration::new(),
+            generator,
         }));
         CONTEXT.with(|c| *c.borrow_mut() = Some((window.as_weak(), state.clone())));
         window.set_rows(ModelRc::from(state.borrow().rows_model.clone()));
@@ -389,6 +396,7 @@ impl App {
         };
         wire(&app.window, &state);
         wire_settings(&app.window, &state);
+        wire_generator(&app.window, &state);
         apply_prefs(&app.window, &state);
         refresh_tree(&app.window, &state);
         let first = state
@@ -566,19 +574,6 @@ fn open_url(win: &AppWindow, st: &Shared, url: &str) {
     if let Err(err) = std::process::Command::new(program).arg(&url).spawn() {
         toast(win, st, &format!("Could not open the website: {err}"));
     }
-}
-
-/// 20 characters from a 64-character alphabet, using the OS random source.
-fn generate_password() -> Zeroizing<String> {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut bytes = [0u8; 20];
-    getrandom::fill(&mut bytes).expect("operating system random source");
-    Zeroizing::new(
-        bytes
-            .iter()
-            .map(|b| ALPHABET[(b & 63) as usize] as char)
-            .collect(),
-    )
 }
 
 fn add_blank_website(item: &mut Item) {

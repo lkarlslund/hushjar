@@ -1,0 +1,273 @@
+import { ScrollView, LineEdit } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { Icon, IconButton, ActionButton, Segmented, Toggle, Stepper } from "widgets.slint";
+import { Card, Row, Hint, PaneTitle } from "cards.slint";
+
+export struct GeneratedValue {
+    value: string,
+    kind: string,
+    when: string,
+}
+
+// The generator's options and output. Rust regenerates when `changed` is
+// called and fills `value`.
+export global GeneratorData {
+    // 0 password, 1 passphrase, 2 username
+    in-out property <int> kind;
+
+    in-out property <int> length: 16;
+    in-out property <bool> uppercase: true;
+    in-out property <bool> lowercase: true;
+    in-out property <bool> numbers: true;
+    in-out property <bool> special;
+    in-out property <int> min-numbers: 1;
+    in-out property <int> min-special: 1;
+    in-out property <bool> avoid-ambiguous;
+
+    in-out property <int> words: 6;
+    in-out property <string> separator: "-";
+    in-out property <bool> capitalize;
+    in-out property <bool> include-number;
+
+    // 0 random word, 1 plus-addressed email, 2 catch-all email
+    in-out property <int> username-kind;
+    in-out property <bool> username-capitalize;
+    in-out property <bool> username-number;
+    in-out property <string> email;
+    in-out property <string> domain;
+
+    in property <string> value;
+    in property <string> error;
+    in property <string> policy-note;
+    in property <int> minimum-length: 5;
+    in property <[GeneratedValue]> history;
+
+    callback changed();
+    callback regenerate();
+    callback copy-value();
+    callback copy-history(int);
+    callback clear-history();
+}
+
+component Options inherits VerticalLayout {
+    spacing: 10px;
+
+    if GeneratorData.kind == 0: VerticalLayout {
+        spacing: 10px;
+        Row {
+            label: "Length";
+            Stepper {
+                value: GeneratorData.length;
+                minimum: GeneratorData.minimum-length;
+                maximum: 128;
+                changed(v) => { GeneratorData.length = v; GeneratorData.changed(); }
+            }
+        }
+        Row {
+            label: "Capital letters (A–Z)";
+            Toggle { checked: GeneratorData.uppercase; toggled => { GeneratorData.uppercase = self.checked; GeneratorData.changed(); } }
+        }
+        Row {
+            label: "Small letters (a–z)";
+            Toggle { checked: GeneratorData.lowercase; toggled => { GeneratorData.lowercase = self.checked; GeneratorData.changed(); } }
+        }
+        Row {
+            label: "Numbers (0–9)";
+            Toggle { checked: GeneratorData.numbers; toggled => { GeneratorData.numbers = self.checked; GeneratorData.changed(); } }
+        }
+        Row {
+            label: "Symbols (!@#$%^&*)";
+            Toggle { checked: GeneratorData.special; toggled => { GeneratorData.special = self.checked; GeneratorData.changed(); } }
+        }
+        Row {
+            label: "At least this many numbers";
+            Stepper {
+                value: GeneratorData.min-numbers;
+                maximum: 9;
+                enabled: GeneratorData.numbers;
+                changed(v) => { GeneratorData.min-numbers = v; GeneratorData.changed(); }
+            }
+        }
+        Row {
+            label: "At least this many symbols";
+            Stepper {
+                value: GeneratorData.min-special;
+                maximum: 9;
+                enabled: GeneratorData.special;
+                changed(v) => { GeneratorData.min-special = v; GeneratorData.changed(); }
+            }
+        }
+        Row {
+            label: "Avoid look-alike characters";
+            hint: "Leaves out I, O, l, 0 and 1.";
+            Toggle { checked: GeneratorData.avoid-ambiguous; toggled => { GeneratorData.avoid-ambiguous = self.checked; GeneratorData.changed(); } }
+        }
+    }
+
+    if GeneratorData.kind == 1: VerticalLayout {
+        spacing: 10px;
+        Row {
+            label: "Words";
+            Stepper {
+                value: GeneratorData.words;
+                minimum: 3;
+                maximum: 20;
+                changed(v) => { GeneratorData.words = v; GeneratorData.changed(); }
+            }
+        }
+        Row {
+            label: "Separator";
+            LineEdit {
+                width: 104px;
+                text: GeneratorData.separator;
+                edited(text) => { GeneratorData.separator = text; GeneratorData.changed(); }
+            }
+        }
+        Row {
+            label: "Capitalise words";
+            Toggle { checked: GeneratorData.capitalize; toggled => { GeneratorData.capitalize = self.checked; GeneratorData.changed(); } }
+        }
+        Row {
+            label: "Add a number";
+            Toggle { checked: GeneratorData.include-number; toggled => { GeneratorData.include-number = self.checked; GeneratorData.changed(); } }
+        }
+    }
+
+    if GeneratorData.kind == 2: VerticalLayout {
+        spacing: 10px;
+        Segmented {
+            options: ["Random word", "Email with +", "Catch-all email"];
+            current: GeneratorData.username-kind;
+            picked(index) => { GeneratorData.username-kind = index; GeneratorData.changed(); }
+        }
+        if GeneratorData.username-kind == 0: VerticalLayout {
+            spacing: 10px;
+            Row {
+                label: "Capitalise";
+                Toggle { checked: GeneratorData.username-capitalize; toggled => { GeneratorData.username-capitalize = self.checked; GeneratorData.changed(); } }
+            }
+            Row {
+                label: "Add a number";
+                Toggle { checked: GeneratorData.username-number; toggled => { GeneratorData.username-number = self.checked; GeneratorData.changed(); } }
+            }
+        }
+        if GeneratorData.username-kind == 1: Row {
+            label: "Your email address";
+            hint: "Adds +something before the @, which most mail providers deliver to you.";
+            LineEdit {
+                width: 240px;
+                text: GeneratorData.email;
+                placeholder-text: "you@example.org";
+                edited(text) => { GeneratorData.email = text; GeneratorData.changed(); }
+            }
+        }
+        if GeneratorData.username-kind == 2: Row {
+            label: "Your catch-all domain";
+            hint: "A domain whose mail all reaches you.";
+            LineEdit {
+                width: 240px;
+                text: GeneratorData.domain;
+                placeholder-text: "example.org";
+                edited(text) => { GeneratorData.domain = text; GeneratorData.changed(); }
+            }
+        }
+    }
+}
+
+export component GeneratorPane inherits Rectangle {
+    background: Theme.window;
+
+    ScrollView {
+        VerticalLayout {
+            alignment: start;
+            padding: 16px;
+            padding-top: 20px;
+            spacing: 14px;
+
+            PaneTitle { icon: Icons.dice; text: "Generator"; }
+
+            Segmented {
+                options: ["Password", "Passphrase", "Username"];
+                current: GeneratorData.kind;
+                picked(index) => { GeneratorData.kind = index; GeneratorData.changed(); }
+            }
+
+            Rectangle {
+                background: Theme.surface;
+                border-radius: Theme.radius;
+                border-width: 1px;
+                border-color: Theme.honey.with-alpha(0.6);
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+                    Text {
+                        text: GeneratorData.error != "" ? GeneratorData.error : GeneratorData.value;
+                        font-family: Theme.mono;
+                        font-size: 17px;
+                        color: GeneratorData.error != "" ? Theme.danger : Theme.text;
+                        wrap: char-wrap;
+                        accessible-role: text;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        if GeneratorData.policy-note != "": Hint {
+                            text: GeneratorData.policy-note;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        ActionButton {
+                            text: "Regenerate";
+                            has-icon: true;
+                            icon: Icons.sync;
+                            clicked => { GeneratorData.regenerate(); }
+                        }
+                        ActionButton {
+                            text: "Copy";
+                            primary: true;
+                            has-icon: true;
+                            icon: Icons.copy;
+                            enabled: GeneratorData.error == "";
+                            clicked => { GeneratorData.copy-value(); }
+                        }
+                    }
+                }
+            }
+
+            Card {
+                title: "Options";
+                Options {}
+            }
+
+            Card {
+                title: "Recently generated";
+                if GeneratorData.history.length == 0: Hint { text: "Values you generate are listed here until Hushjar quits or locks."; }
+                for entry[i] in GeneratorData.history: HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        Text {
+                            text: entry.value;
+                            font-family: Theme.mono;
+                            color: Theme.text;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: entry.kind + " · " + entry.when;
+                            font-size: Theme.small;
+                            color: Theme.faint;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton { icon: Icons.copy; label: "Copy"; clicked => { GeneratorData.copy-history(i); } }
+                    }
+                }
+                if GeneratorData.history.length > 0: HorizontalLayout {
+                    alignment: end;
+                    ActionButton { text: "Clear list"; clicked => { GeneratorData.clear-history(); } }
+                }
+            }
+        }
+    }
+}

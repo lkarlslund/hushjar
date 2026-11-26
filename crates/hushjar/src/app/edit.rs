@@ -207,6 +207,7 @@ pub(super) fn run_pending(win: &AppWindow, st: &Shared) {
             new_item(win, st);
         }
         Some(Pending::Settings) => show_settings(win, st),
+        Some(Pending::Generator) => show_generator(win, st),
         None => {}
     }
 }
@@ -222,6 +223,7 @@ pub(super) fn lock_all(win: &AppWindow, st: &Shared) {
             }
         }
         s.clipboard.borrow_mut().clear_if_ours();
+        s.generator.forget_history();
     }
     win.set_leave_pending(false);
 }

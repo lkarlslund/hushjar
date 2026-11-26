@@ -1,0 +1,77 @@
+import { Theme, Icons } from "theme.slint";
+import { Icon } from "widgets.slint";
+
+// Building blocks for the settings-style panes (settings, generator, Send).
+
+// A pane heading with an icon.
+export component PaneTitle inherits HorizontalLayout {
+    in property <image> icon;
+    in property <string> text;
+    spacing: 10px;
+    VerticalLayout {
+        alignment: center;
+        Icon { source: root.icon; width: 22px; height: 22px; tint: Theme.honey; }
+    }
+    Text {
+        text: root.text;
+        font-size: 18px;
+        font-weight: 600;
+        color: Theme.text;
+        horizontal-stretch: 1;
+    }
+    @children
+}
+
+export component Card inherits Rectangle {
+    in property <string> title;
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        Text {
+            text: root.title;
+            font-size: 14px;
+            font-weight: 600;
+            color: Theme.text;
+        }
+        @children
+    }
+}
+
+// A setting: a label (with an optional hint) on the left, the control on the right.
+export component Row inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> hint;
+    spacing: 12px;
+
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+        Text {
+            text: root.label;
+            color: Theme.text;
+            wrap: word-wrap;
+        }
+        if root.hint != "": Text {
+            text: root.hint;
+            font-size: Theme.small;
+            color: Theme.faint;
+            wrap: word-wrap;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        @children
+    }
+}
+
+export component Hint inherits Text {
+    font-size: Theme.small;
+    color: Theme.faint;
+    wrap: word-wrap;
+}
+
