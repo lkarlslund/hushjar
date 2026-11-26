@@ -86,6 +86,11 @@ impl Bridge {
         offer.modes = modes;
     }
 
+    /// Puts every "first time" key back to asking.
+    pub fn forget_approvals(&self) {
+        lock(&self.offer).approved.clear();
+    }
+
     pub fn key_count(&self) -> usize {
         lock(&self.offer).keys.len()
     }

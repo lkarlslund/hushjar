@@ -217,6 +217,7 @@ pub(super) fn handle_sign_in_event(win: &AppWindow, st: &Shared, event: Event) {
                     two_factor: vec![],
                     synced_at,
                     note: String::new(),
+                    unlock: UnlockOptions::default(),
                 });
                 state.expanded.insert(key.clone());
             }

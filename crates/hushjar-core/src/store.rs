@@ -143,6 +143,15 @@ impl Store {
         fs::read(self.account_dir(id)?.join("cache.bin"))
     }
 
+    /// Deletes an account's offline copy, which also holds its session
+    /// tokens, so the next unlock has to sign in online.
+    pub fn forget_offline_copy(&self, id: &str) -> io::Result<()> {
+        match fs::remove_file(self.account_dir(id)?.join("cache.bin")) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        }
+    }
+
     /// Forgets an account on this device.
     pub fn remove(&self, id: &str) -> io::Result<()> {
         let dir = self.account_dir(id)?;

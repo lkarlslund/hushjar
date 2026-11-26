@@ -206,6 +206,7 @@ pub(super) fn run_pending(win: &AppWindow, st: &Shared) {
         Some(Pending::NewItem) => {
             new_item(win, st);
         }
+        Some(Pending::Settings) => show_settings(win, st),
         None => {}
     }
 }

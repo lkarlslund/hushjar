@@ -6,10 +6,10 @@ use std::time::Duration;
 use slint::{Timer, TimerMode};
 use zeroize::Zeroizing;
 
-pub const CLEAR_AFTER: Duration = Duration::from_secs(30);
-
 pub struct Clipboard {
     inner: Option<arboard::Clipboard>,
+    /// How long a copied value stays, or None to leave it.
+    pub clear_after: Option<Duration>,
     last: Option<Zeroizing<String>>,
     timer: Timer,
 }
@@ -18,6 +18,7 @@ impl Clipboard {
     pub fn new() -> Self {
         Self {
             inner: arboard::Clipboard::new().ok(),
+            clear_after: Some(Duration::from_secs(30)),
             last: None,
             timer: Timer::default(),
         }
@@ -36,8 +37,12 @@ impl Clipboard {
         let result = clipboard.set().text(text);
         result.map_err(|e| format!("Could not copy: {e}"))?;
         me.last = Some(Zeroizing::new(text.to_string()));
+        let Some(delay) = me.clear_after else {
+            me.timer.stop();
+            return Ok(());
+        };
         let weak = std::rc::Rc::downgrade(this);
-        me.timer.start(TimerMode::SingleShot, CLEAR_AFTER, move || {
+        me.timer.start(TimerMode::SingleShot, delay, move || {
             if let Some(this) = weak.upgrade() {
                 this.borrow_mut().clear_if_ours();
             }

@@ -17,11 +17,14 @@ use zeroize::Zeroizing;
 
 use crate::clipboard::Clipboard;
 use crate::model::{self, Account, Field, FieldPath, Item, ItemType};
+use crate::prefs::{LockAction, Prefs};
 use crate::sshagent::{AskMode, Bridge, Prompt};
 use crate::tree::{self, GroupBy, Row};
 use crate::worker::{Command, Event, Worker};
 mod edit;
 mod events;
+mod integration;
+mod settings;
 mod sign_in;
 mod ssh;
 mod view;
@@ -29,6 +32,8 @@ mod wire;
 
 use edit::*;
 use events::*;
+use integration::Integration;
+use settings::*;
 use sign_in::*;
 use ssh::*;
 use view::*;
@@ -39,9 +44,6 @@ use crate::{
     ItemHeader, PaneMode, RowKind, SignInForm, TreeRow,
 };
 
-/// Lock every account after this long without a key press or click.
-const IDLE_LOCK: Duration = Duration::from_secs(15 * 60);
-
 #[derive(Clone, Debug, PartialEq)]
 enum Shown {
     Nothing,
@@ -50,6 +52,7 @@ enum Shown {
     Locked(usize),
     Account(usize),
     SignIn,
+    Settings,
 }
 
 struct Draft {
@@ -72,6 +75,7 @@ enum Pending {
     Select(String),
     LockAll,
     NewItem,
+    Settings,
 }
 
 struct AccountState {
@@ -84,6 +88,14 @@ struct AccountState {
     two_factor: Vec<TwoFactorProvider>,
     synced_at: Option<u64>,
     note: String,
+    unlock: UnlockOptions,
+}
+
+/// Ways to unlock an account other than the master password.
+#[derive(Clone, Copy, Debug, Default)]
+struct UnlockOptions {
+    pin: bool,
+    system_auth: bool,
 }
 
 #[derive(Default)]
@@ -126,6 +138,10 @@ pub struct State {
     prompts: VecDeque<Prompt>,
     /// Per SSH key ("account/item"): offered to the agent, and when to ask.
     ssh_settings: HashMap<String, (bool, AskMode)>,
+    prefs: Prefs,
+    /// The desktop's own colour scheme, for the "System" theme.
+    system_scheme: slint::language::ColorScheme,
+    desktop: Integration,
 }
 
 type Shared = Rc<RefCell<State>>;
@@ -313,6 +329,7 @@ impl App {
                 two_factor: vec![],
                 synced_at: None,
                 note: String::new(),
+                unlock: UnlockOptions::default(),
             });
         }
         let bridge = Arc::new(Bridge::new(|prompt| {
@@ -332,6 +349,8 @@ impl App {
             None => Err("the SSH agent is not available on this system yet".into()),
         };
         let ssh_settings = load_ssh_settings(&store);
+        let prefs = Prefs::from_settings(&store.read_settings());
+        let system_scheme = window.global::<crate::Palette>().get_color_scheme();
         let state: Shared = Rc::new(RefCell::new(State {
             store,
             accounts,
@@ -355,6 +374,9 @@ impl App {
             agent,
             prompts: VecDeque::new(),
             ssh_settings,
+            prefs,
+            system_scheme,
+            desktop: Integration::new(),
         }));
         CONTEXT.with(|c| *c.borrow_mut() = Some((window.as_weak(), state.clone())));
         window.set_rows(ModelRc::from(state.borrow().rows_model.clone()));
@@ -366,6 +388,8 @@ impl App {
             _timers: vec![],
         };
         wire(&app.window, &state);
+        wire_settings(&app.window, &state);
+        apply_prefs(&app.window, &state);
         refresh_tree(&app.window, &state);
         let first = state
             .borrow()
@@ -408,12 +432,12 @@ impl App {
             if expired {
                 render_prompt(&w, &st);
             }
-            let idle =
-                st.borrow().last_activity.elapsed() > IDLE_LOCK && st.borrow().any_unlocked();
+            let limit = st.borrow().idle_limit();
+            let idle = limit.is_some_and(|limit| st.borrow().last_activity.elapsed() > limit)
+                && st.borrow().any_unlocked();
             if idle {
                 st.borrow_mut().draft = None;
-                lock_all(&w, &st);
-                toast(&w, &st, "Locked after 15 minutes without activity");
+                time_out_all(&w, &st);
             }
         });
         Ok(Self {
@@ -424,6 +448,19 @@ impl App {
 }
 
 impl State {
+    /// The strictest of the user's choice and any organisation policy.
+    fn idle_limit(&self) -> Option<Duration> {
+        match (self.prefs.idle_limit(), self.policy_idle_limit()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// The longest timeout organisation policies allow, if any.
+    fn policy_idle_limit(&self) -> Option<Duration> {
+        None
+    }
+
     fn current_totp_period(&self) -> u64 {
         if let Shown::Item { account, id } = &self.shown
             && let Some(item) = self.item(*account, id)
@@ -451,15 +488,58 @@ fn toast(win: &AppWindow, st: &Shared, text: &str) {
 fn copy(win: &AppWindow, st: &Shared, text: &str, label: &str) {
     let clipboard = st.borrow().clipboard.clone();
     match Clipboard::copy(&clipboard, text) {
-        Ok(()) => toast(
-            win,
-            st,
-            &format!(
-                "Copied {label} · clears in {} s",
-                crate::clipboard::CLEAR_AFTER.as_secs()
-            ),
-        ),
+        Ok(()) => {
+            let delay = clipboard.borrow().clear_after;
+            let text = match delay {
+                Some(d) if d.as_secs() >= 60 => {
+                    format!("Copied {label} · clears in {} min", d.as_secs() / 60)
+                }
+                Some(d) => format!("Copied {label} · clears in {} s", d.as_secs()),
+                None => format!("Copied {label}"),
+            };
+            toast(win, st, &text)
+        }
         Err(message) => toast(win, st, &message),
+    }
+}
+
+/// Copies something that is not a secret, such as a shell line.
+fn copy_plain(win: &AppWindow, st: &Shared, text: &str) {
+    let clipboard = st.borrow().clipboard.clone();
+    match Clipboard::copy(&clipboard, text) {
+        Ok(()) => toast(win, st, "Copied"),
+        Err(message) => toast(win, st, &message),
+    }
+}
+
+/// When the user has unsaved changes, asks first and returns false;
+/// `then` runs once they choose to leave.
+fn leave_to(win: &AppWindow, st: &Shared, then: Pending) -> bool {
+    if st.borrow().draft.as_ref().is_some_and(Draft::dirty) {
+        st.borrow_mut().pending = Some(then);
+        win.set_leave_pending(true);
+        return false;
+    }
+    st.borrow_mut().draft = None;
+    true
+}
+
+/// Locks, or logs out, every unlocked account after the idle time.
+fn time_out_all(win: &AppWindow, st: &Shared) {
+    let log_out = st.borrow().prefs.lock_action == LockAction::LogOut;
+    if log_out {
+        let s = st.borrow();
+        for a in &s.accounts {
+            if a.vault.is_some() {
+                let _ = a.worker.tx.send(Command::LogOut);
+            }
+        }
+        s.clipboard.borrow_mut().clear_if_ours();
+        drop(s);
+        toast(win, st, "Logged out after no activity");
+    } else {
+        lock_all(win, st);
+        toast(win, st, "Locked after no activity");
     }
 }
 

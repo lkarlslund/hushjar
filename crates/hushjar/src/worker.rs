@@ -37,6 +37,8 @@ pub enum Command {
     Delete(String),
     CreateFolder(String),
     Lock,
+    /// Locks and forgets the session and offline copy.
+    LogOut,
     Remove,
 }
 
@@ -314,6 +316,13 @@ fn run(
             }
             Command::Lock => {
                 session = None;
+                emit(Event::Locked);
+            }
+            Command::LogOut => {
+                session = None;
+                if let Some(p) = &profile {
+                    let _ = store.forget_offline_copy(&p.id);
+                }
                 emit(Event::Locked);
             }
             Command::Remove => {

@@ -47,6 +47,7 @@ const STEPS: &[Step] = &[
         800,
     ),
     ("06-types", |w| w.invoke_group_by_picked(2), 800),
+    ("06b-settings", |w| w.invoke_open_settings(), 800),
     (
         "07-add-account",
         |w| {

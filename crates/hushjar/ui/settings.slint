@@ -1,0 +1,379 @@
+import { ScrollView, LineEdit } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { Icon, ActionButton, Avatar, Segmented, Toggle, Picker } from "widgets.slint";
+
+// One account's unlock options in the settings pane.
+export struct AccountSecurity {
+    email: string,
+    tint: color,
+    initials: string,
+    unlocked: bool,
+    pin: bool,
+    system-auth: bool,
+}
+
+// Everything the settings pane shows and changes. The Rust side reads the
+// in-out properties when `changed` is called and saves them.
+export global SettingsData {
+    in-out property <int> theme;
+    in-out property <int> lock-after;
+    in-out property <bool> lock-on-screen-lock;
+    in-out property <bool> lock-on-sleep;
+    in-out property <int> lock-action;
+    in-out property <int> clear-after;
+    in-out property <int> ssh-default;
+    in-out property <bool> tray;
+    in-out property <bool> close-to-tray;
+    in-out property <bool> start-in-tray;
+    in-out property <bool> start-on-login;
+
+    in property <[string]> lock-after-options;
+    in property <[string]> clear-after-options;
+    in property <bool> desktop-available;
+    in property <bool> system-auth-available;
+    in property <string> system-auth-note;
+    in property <string> agent-status;
+    in property <string> policy-note;
+    in property <string> version;
+    in property <[AccountSecurity]> accounts;
+
+    callback changed();
+    callback copy-agent-line();
+    callback forget-approvals();
+    callback set-pin(int, string);
+    callback remove-pin(int);
+    callback system-auth(int, bool);
+}
+
+component Card inherits Rectangle {
+    in property <string> title;
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        Text {
+            text: root.title;
+            font-size: 14px;
+            font-weight: 600;
+            color: Theme.text;
+        }
+        @children
+    }
+}
+
+// A setting: a label (with an optional hint) on the left, the control on the right.
+component Row inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> hint;
+    spacing: 12px;
+
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+        Text {
+            text: root.label;
+            color: Theme.text;
+            wrap: word-wrap;
+        }
+        if root.hint != "": Text {
+            text: root.hint;
+            font-size: Theme.small;
+            color: Theme.faint;
+            wrap: word-wrap;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        @children
+    }
+}
+
+component Hint inherits Text {
+    font-size: Theme.small;
+    color: Theme.faint;
+    wrap: word-wrap;
+}
+
+component AccountRow inherits VerticalLayout {
+    in property <AccountSecurity> account;
+    in property <int> index;
+    property <bool> entering;
+    spacing: 8px;
+
+    HorizontalLayout {
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Avatar { initials: root.account.initials; tint: root.account.tint; size: 24px; }
+        }
+        Text {
+            text: root.account.email;
+            vertical-alignment: center;
+            color: Theme.text;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        if !root.account.unlocked: Text {
+            text: "Unlock to change";
+            vertical-alignment: center;
+            font-size: Theme.small;
+            color: Theme.faint;
+        }
+    }
+    Row {
+        label: "Unlock with a PIN";
+        hint: root.account.pin ? "A PIN is set. Five wrong tries remove it." : "";
+        if root.account.pin: ActionButton {
+            text: "Remove PIN";
+            enabled: root.account.unlocked;
+            clicked => { SettingsData.remove-pin(root.index); }
+        }
+        if !root.account.pin && !root.entering: ActionButton {
+            text: "Set a PIN…";
+            enabled: root.account.unlocked;
+            clicked => { root.entering = true; }
+        }
+    }
+    if root.entering: HorizontalLayout {
+        spacing: 8px;
+        pin := LineEdit {
+            input-type: InputType.password;
+            placeholder-text: "New PIN (4 characters or more)";
+            horizontal-stretch: 1;
+            accepted(text) => {
+                SettingsData.set-pin(root.index, text);
+                root.entering = false;
+            }
+        }
+        ActionButton { text: "Cancel"; clicked => { root.entering = false; } }
+        ActionButton {
+            text: "Set PIN";
+            primary: true;
+            clicked => {
+                SettingsData.set-pin(root.index, pin.text);
+                root.entering = false;
+            }
+        }
+    }
+    Row {
+        label: "Unlock with system authentication";
+        hint: "Uses your computer's password or fingerprint while Hushjar runs. After a restart the master password is needed once.";
+        Toggle {
+            checked: root.account.system-auth;
+            enabled: root.account.unlocked && SettingsData.system-auth-available;
+            toggled => { SettingsData.system-auth(root.index, self.checked); }
+        }
+    }
+}
+
+export component SettingsPane inherits Rectangle {
+    background: Theme.window;
+
+    ScrollView {
+        VerticalLayout {
+            alignment: start;
+            padding: 16px;
+            padding-top: 20px;
+            spacing: 14px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    Icon { source: Icons.settings; width: 22px; height: 22px; tint: Theme.honey; }
+                }
+                Text {
+                    text: "Settings";
+                    font-size: 18px;
+                    font-weight: 600;
+                    color: Theme.text;
+                }
+            }
+
+            Card {
+                title: "Appearance";
+                Row {
+                    label: "Theme";
+                    Segmented {
+                        width: 220px;
+                        options: ["System", "Light", "Dark"];
+                        current: SettingsData.theme;
+                        picked(index) => {
+                            SettingsData.theme = index;
+                            SettingsData.changed();
+                        }
+                    }
+                }
+            }
+
+            Card {
+                title: "Locking";
+                Row {
+                    label: "Lock after no activity for";
+                    Picker {
+                        width: 220px;
+                        options: SettingsData.lock-after-options;
+                        current: SettingsData.lock-after;
+                        picked(index) => {
+                            SettingsData.lock-after = index;
+                            SettingsData.changed();
+                        }
+                    }
+                }
+                Row {
+                    label: "Lock when the screen locks";
+                    Toggle {
+                        checked: SettingsData.lock-on-screen-lock;
+                        toggled => {
+                            SettingsData.lock-on-screen-lock = self.checked;
+                            SettingsData.changed();
+                        }
+                    }
+                }
+                Row {
+                    label: "Lock when the computer sleeps";
+                    Toggle {
+                        checked: SettingsData.lock-on-sleep;
+                        toggled => {
+                            SettingsData.lock-on-sleep = self.checked;
+                            SettingsData.changed();
+                        }
+                    }
+                }
+                Row {
+                    label: "When the time runs out";
+                    hint: SettingsData.lock-action == 1 ? "Logging out removes the offline copy; you sign in again with two-step login." : "";
+                    Segmented {
+                        width: 220px;
+                        options: ["Lock", "Log out"];
+                        current: SettingsData.lock-action;
+                        picked(index) => {
+                            SettingsData.lock-action = index;
+                            SettingsData.changed();
+                        }
+                    }
+                }
+                if SettingsData.policy-note != "": Hint { text: SettingsData.policy-note; }
+            }
+
+            Card {
+                title: "Accounts";
+                if SettingsData.accounts.length == 0: Hint { text: "No accounts yet."; }
+                for account[i] in SettingsData.accounts: AccountRow {
+                    account: account;
+                    index: i;
+                }
+                if !SettingsData.system-auth-available && SettingsData.system-auth-note != "": Hint {
+                    text: SettingsData.system-auth-note;
+                }
+            }
+
+            Card {
+                title: "Clipboard";
+                Row {
+                    label: "Clear copied values after";
+                    hint: "Only if the clipboard still holds what Hushjar copied.";
+                    Picker {
+                        width: 220px;
+                        options: SettingsData.clear-after-options;
+                        current: SettingsData.clear-after;
+                        picked(index) => {
+                            SettingsData.clear-after = index;
+                            SettingsData.changed();
+                        }
+                    }
+                }
+            }
+
+            Card {
+                title: "SSH agent";
+                Hint { text: SettingsData.agent-status; }
+                Row {
+                    label: "Ask before a key is used";
+                    hint: "For keys without their own setting. \"First time\" asks once until the account locks.";
+                    Segmented {
+                        width: 220px;
+                        options: ["First time", "Every time"];
+                        current: SettingsData.ssh-default;
+                        picked(index) => {
+                            SettingsData.ssh-default = index;
+                            SettingsData.changed();
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    ActionButton {
+                        text: "Copy SSH_AUTH_SOCK line";
+                        has-icon: true;
+                        icon: Icons.copy;
+                        clicked => { SettingsData.copy-agent-line(); }
+                    }
+                    ActionButton {
+                        text: "Forget approvals";
+                        clicked => { SettingsData.forget-approvals(); }
+                    }
+                }
+            }
+
+            Card {
+                title: "Desktop";
+                Row {
+                    label: "Show in the system tray";
+                    Toggle {
+                        checked: SettingsData.tray;
+                        enabled: SettingsData.desktop-available;
+                        toggled => {
+                            SettingsData.tray = self.checked;
+                            SettingsData.changed();
+                        }
+                    }
+                }
+                Row {
+                    label: "Closing the window keeps Hushjar in the tray";
+                    Toggle {
+                        checked: SettingsData.close-to-tray;
+                        enabled: SettingsData.desktop-available && SettingsData.tray;
+                        toggled => {
+                            SettingsData.close-to-tray = self.checked;
+                            SettingsData.changed();
+                        }
+                    }
+                }
+                Row {
+                    label: "Start in the tray";
+                    Toggle {
+                        checked: SettingsData.start-in-tray;
+                        enabled: SettingsData.desktop-available && SettingsData.tray;
+                        toggled => {
+                            SettingsData.start-in-tray = self.checked;
+                            SettingsData.changed();
+                        }
+                    }
+                }
+                Row {
+                    label: "Start when I log in";
+                    Toggle {
+                        checked: SettingsData.start-on-login;
+                        enabled: SettingsData.desktop-available;
+                        toggled => {
+                            SettingsData.start-on-login = self.checked;
+                            SettingsData.changed();
+                        }
+                    }
+                }
+                if !SettingsData.desktop-available: Hint { text: "Tray and start-up options are not available on this system."; }
+            }
+
+            Hint {
+                text: "Hushjar " + SettingsData.version;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}

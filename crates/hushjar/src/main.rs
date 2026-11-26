@@ -5,6 +5,7 @@ mod clipboard;
 #[cfg(test)]
 mod mock;
 mod model;
+mod prefs;
 #[cfg(feature = "snapshot")]
 mod snapshot;
 mod sshagent;

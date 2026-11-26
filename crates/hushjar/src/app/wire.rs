@@ -547,6 +547,9 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
             }
         });
     });
+    on!(on_open_settings, |win, st| {
+        show_settings(&win, st);
+    });
     on!(on_not_yet, |win, st, what: SharedString| {
         let milestone = if what.as_str() == "Settings" {
             "M3"

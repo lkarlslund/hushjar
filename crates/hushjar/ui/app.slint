@@ -3,6 +3,7 @@ import { Theme, Icons } from "theme.slint";
 import { Icon, IconButton, ActionButton } from "widgets.slint";
 import { VaultTree } from "tree.slint";
 import { DetailsPane } from "details.slint";
+import { SettingsData, AccountSecurity } from "settings.slint";
 import {
     AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode,
     RowIcon, RowKind, SignInForm, TreeRow,
@@ -10,7 +11,7 @@ import {
 
 export {
     AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode,
-    RowIcon, RowKind, SignInForm, TreeRow, Palette,
+    RowIcon, RowKind, SignInForm, TreeRow, Palette, SettingsData, AccountSecurity,
 }
 
 component TopBar inherits Rectangle {
@@ -214,6 +215,9 @@ export component AppWindow inherits Window {
     callback sync();
     callback new-item();
     callback not-yet(string);
+    callback open-settings();
+    callback open-generator();
+    callback open-sends();
     callback lock-all();
 
     public function focus-tree() {
@@ -231,7 +235,7 @@ export component AppWindow inherits Window {
         KeyBinding { keys: @keys(Control + N); activated => { root.new-item(); } }
         KeyBinding { keys: @keys(Control + L); activated => { root.lock-all(); } }
         KeyBinding { keys: @keys(Control + R); activated => { root.sync(); } }
-        KeyBinding { keys: @keys(Control + G); activated => { root.not-yet("The generator"); } }
+        KeyBinding { keys: @keys(Control + G); activated => { root.open-generator(); } }
         KeyBinding { keys: @keys(Control + U); activated => { root.copy-shortcut("username"); } }
         KeyBinding { keys: @keys(Control + P); activated => { root.copy-shortcut("password"); } }
         KeyBinding { keys: @keys(Control + T); activated => { root.copy-shortcut("code"); } }
@@ -245,9 +249,9 @@ export component AppWindow inherits Window {
                 toggle-sidebar => { root.sidebar-visible = !root.sidebar-visible; }
                 sync => { root.sync(); }
                 new-item => { root.new-item(); }
-                generator => { root.not-yet("The generator"); }
-                send => { root.not-yet("Send"); }
-                settings => { root.not-yet("Settings"); }
+                generator => { root.open-generator(); }
+                send => { root.open-sends(); }
+                settings => { root.open-settings(); }
                 lock-all => { root.lock-all(); }
                 agent-running: root.agent-running;
                 agent-keys: root.agent-keys;

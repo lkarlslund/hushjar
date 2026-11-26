@@ -59,7 +59,7 @@ pub(super) fn update_agent_keys(win: &AppWindow, st: &Shared) {
                 .ssh_settings
                 .get(&id)
                 .copied()
-                .unwrap_or((true, AskMode::FirstTime));
+                .unwrap_or((true, state.prefs.ssh_default));
             if enabled {
                 keys.push(hushjar_agent::AgentKey {
                     id: id.clone(),
@@ -88,7 +88,7 @@ pub(super) fn render_ssh_settings(win: &AppWindow, st: &Shared) {
     win.set_ssh_visible(shown.is_some() && state.agent.is_ok());
     let (enabled, mode) = shown
         .and_then(|id| state.ssh_settings.get(&id).copied())
-        .unwrap_or((true, AskMode::FirstTime));
+        .unwrap_or((true, state.prefs.ssh_default));
     win.set_ssh_enabled(enabled);
     win.set_ssh_mode(if mode == AskMode::EveryTime { 1 } else { 0 });
 }
@@ -104,10 +104,8 @@ pub(super) fn change_ssh_setting(
             return;
         };
         let key = ssh_key_id(&state.accounts[account], &id);
-        let setting = state
-            .ssh_settings
-            .entry(key)
-            .or_insert((true, AskMode::FirstTime));
+        let default = state.prefs.ssh_default;
+        let setting = state.ssh_settings.entry(key).or_insert((true, default));
         change(setting);
     }
     save_ssh_settings(st);

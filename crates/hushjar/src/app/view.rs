@@ -159,6 +159,10 @@ pub(super) fn render(win: &AppWindow, st: &Shared) {
     win.set_busy(st.borrow().draft.as_ref().is_some_and(|d| d.saving) || matches!(shown, Shown::Locked(i) if st.borrow().accounts.get(i).is_some_and(|a| a.busy)));
     match shown {
         Shown::Nothing => win.set_mode(PaneMode::Empty),
+        Shown::Settings => {
+            render_settings(win, st);
+            win.set_mode(PaneMode::Settings);
+        }
         Shown::SignIn => {
             render_sign_in(win, st);
             win.set_mode(PaneMode::SignIn);
