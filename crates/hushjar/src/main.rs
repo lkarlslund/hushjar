@@ -10,7 +10,28 @@ mod snapshot;
 mod tree;
 mod worker;
 
+/// The application ID: the Wayland app ID and X11 window class, matching
+/// the desktop entry and icon names in `packaging/linux`.
+pub const APP_ID: &str = "io.github.lkarlslund.Hushjar";
+
+/// Selects the winit backend and names the window after [`APP_ID`], so
+/// desktops can match it to its desktop entry, icon and window rules.
+fn select_backend() -> Result<(), slint::PlatformError> {
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .with_winit_window_attributes_hook(|attributes| {
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let attributes =
+                slint::winit_030::winit::platform::wayland::WindowAttributesExtWayland::with_name(
+                    attributes, APP_ID, "hushjar",
+                );
+            attributes
+        })
+        .select()
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    select_backend()?;
     let root = match std::env::var_os("HUSHJAR_DATA_DIR") {
         Some(dir) => std::path::PathBuf::from(dir),
         None => hushjar_core::store::default_root().ok_or("no home folder to keep data in")?,

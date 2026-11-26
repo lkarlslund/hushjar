@@ -10,7 +10,7 @@ publish = false
 
 [workspace.dependencies]
 hushjar-core = { path = "crates/hushjar-core" }
-slint = "1.19"
+slint = { version = "1.19", features = ["unstable-winit-030"] }
 slint-build = "1.19"
 
 [workspace.lints.rust]

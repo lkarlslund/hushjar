@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Hushjar
+GenericName=Password Manager
+Comment=Keep your secrets in a jar: a desktop app for Bitwarden and Vaultwarden
+Exec=hushjar
+Icon=io.github.lkarlslund.Hushjar
+Terminal=false
+Categories=Utility;Security;
+Keywords=password;passwords;bitwarden;vaultwarden;secrets;ssh;
+StartupWMClass=io.github.lkarlslund.Hushjar
+SingleMainWindow=true
