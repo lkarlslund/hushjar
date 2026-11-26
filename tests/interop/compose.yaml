@@ -1,0 +1,23 @@
+name: hushjar-interop
+services:
+  vaultwarden:
+    image: vaultwarden/server:1.37.3@sha256:1587c45feaa479f1f5e8af3b00eded36bff77bcf1880cf8dbf0541706dd470e0
+    ports:
+      - "127.0.0.1:18281:80"
+    environment:
+      DOMAIN: http://127.0.0.1:18281
+      SIGNUPS_ALLOWED: "true"
+      PUSH_ENABLED: "false"
+      ICON_SERVICE: "internal"
+      DISABLE_ICON_DOWNLOAD: "true"
+      LOG_LEVEL: warn
+      # Effectively unthrottled synthetic tests; zero values are invalid upstream.
+      LOGIN_RATELIMIT_SECONDS: "1"
+      LOGIN_RATELIMIT_MAX_BURST: "1000000"
+      UNAUTHENTICATED_RATELIMIT_SECONDS: "1"
+      UNAUTHENTICATED_RATELIMIT_MAX_BURST: "1000000"
+      ADMIN_RATELIMIT_SECONDS: "1"
+      ADMIN_RATELIMIT_MAX_BURST: "1000000"
+    tmpfs:
+      - /data:size=268435456,mode=0700
+    restart: "no"
