@@ -2,6 +2,7 @@ import { LineEdit } from "std-widgets.slint";
 import { Theme, Icons } from "theme.slint";
 import { Icon, IconButton, ActionButton, Toggle, Picker } from "widgets.slint";
 import { Hint } from "cards.slint";
+import { Platform } from "types.slint";
 
 // Item and folder actions beyond plain editing: the item's "more" menu,
 // the master password re-prompt, attachments, passkeys, organisation moves,
@@ -316,7 +317,7 @@ export component AttachmentsCard inherits ExtraCard {
                     color: ItemExtras.confirm-attachment == i ? Theme.danger : Theme.muted;
                 }
             }
-            if ItemExtras.confirm-attachment != i && ItemExtras.attachments-open: VerticalLayout {
+            if ItemExtras.confirm-attachment != i && ItemExtras.attachments-open && Platform.open-files: VerticalLayout {
                 alignment: center;
                 ActionButton {
                     text: "Open";
@@ -324,7 +325,7 @@ export component AttachmentsCard inherits ExtraCard {
                     clicked => { ItemExtras.open-attachment(i); }
                 }
             }
-            if ItemExtras.confirm-attachment != i && ItemExtras.attachments-open: VerticalLayout {
+            if ItemExtras.confirm-attachment != i && ItemExtras.attachments-open && Platform.file-dialogs: VerticalLayout {
                 alignment: center;
                 ActionButton {
                     text: "Save…";
@@ -379,7 +380,7 @@ export component AttachmentsCard inherits ExtraCard {
             color: Theme.muted;
         }
     }
-    if ItemExtras.can-add-attachment: HorizontalLayout {
+    if ItemExtras.can-add-attachment && Platform.file-dialogs: HorizontalLayout {
         padding-left: 10px;
         padding-top: 4px;
         spacing: 10px;
@@ -649,7 +650,7 @@ export component SshKeyTools inherits ExtraCard {
             clicked => { ItemExtras.generate-ssh-key(ItemExtras.ssh-algorithm); }
         }
         Rectangle { horizontal-stretch: 1; }
-        ActionButton {
+        if Platform.file-dialogs: ActionButton {
             text: "Import key…";
             enabled: !ItemExtras.ssh-busy;
             clicked => { ItemExtras.import-ssh-key(); }

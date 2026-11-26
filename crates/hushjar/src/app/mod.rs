@@ -437,7 +437,7 @@ impl App {
             shown_sections: vec![],
             rows_model: Rc::new(VecModel::default()),
             toast_timer: Rc::new(Timer::default()),
-            clipboard: Rc::new(RefCell::new(Clipboard::new())),
+            clipboard: Rc::new(RefCell::new(Clipboard::new(&window))),
             last_activity: Instant::now(),
             next_id: 1,
             bridge,
@@ -459,6 +459,10 @@ impl App {
         window.set_rows(ModelRc::from(state.borrow().rows_model.clone()));
         let types: Vec<SharedString> = ItemType::CREATABLE.iter().map(|t| s(t.label())).collect();
         window.set_item_types(ModelRc::new(VecModel::from(types)));
+        let platform = window.global::<crate::Platform>();
+        platform.set_file_dialogs(crate::dialogs::AVAILABLE);
+        platform.set_ssh_agent(cfg!(not(target_os = "android")));
+        platform.set_open_files(cfg!(not(target_os = "android")));
 
         let app = Self {
             window,

@@ -2,6 +2,7 @@ import { ScrollView, LineEdit } from "std-widgets.slint";
 import { Theme, Icons } from "theme.slint";
 import { ActionButton, Picker } from "widgets.slint";
 import { Card, Row, Hint, PaneTitle } from "cards.slint";
+import { Platform } from "types.slint";
 
 // Everything the import and export pane shows. Rust fills the option lists
 // and messages; the in-out properties are what the user typed or chose.
@@ -98,8 +99,12 @@ export component TransferPane inherits Rectangle {
                 title: "Nothing to do yet";
                 Hint { text: "Unlock an account to import into it or export from it."; }
             }
+            if !Platform.file-dialogs: Card {
+                title: "Not on this device yet";
+                Hint { text: "Importing and exporting need a file picker, which Hushjar does not have here yet. Use Hushjar on a computer for now."; }
+            }
 
-            if TransferData.any-account: Card {
+            if TransferData.any-account && Platform.file-dialogs: Card {
                 title: "Export";
                 Row {
                     label: "Account";
@@ -161,7 +166,7 @@ export component TransferPane inherits Rectangle {
                 }
             }
 
-            if TransferData.any-account: Card {
+            if TransferData.any-account && Platform.file-dialogs: Card {
                 title: "Import";
                 Row {
                     label: "Account";

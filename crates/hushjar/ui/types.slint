@@ -116,3 +116,12 @@ export struct AccountSummary {
     busy: bool,
     count: int,
 }
+
+// What this platform offers. Android has no file dialogs, no SSH agent and
+// no way yet to open a file in another app, so the screens hide what needs
+// them.
+export global Platform {
+    in property <bool> file-dialogs: true;
+    in property <bool> ssh-agent: true;
+    in property <bool> open-files: true;
+}

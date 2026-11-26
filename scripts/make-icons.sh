@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Regenerates the Windows .ico and the macOS .icns from the Linux SVG icon.
+# Regenerates the Windows .ico, the macOS .icns and the Android launcher
+# icons from the Linux SVG icon.
 # The results are committed, so builds do not need this; run it after the
 # SVG changes. Needs rsvg-convert and ImageMagick.
 set -euo pipefail
@@ -28,4 +29,12 @@ for kind, size in entries:
     body += kind.encode() + struct.pack(">I", len(data) + 8) + data
 open(out, "wb").write(b"icns" + struct.pack(">I", len(body) + 8) + body)
 PY
-echo "Wrote packaging/windows/hushjar.ico and packaging/macos/Hushjar.icns"
+# Android: one launcher icon per screen density (48 dp).
+for pair in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+    density=${pair%%:*}
+    size=${pair##*:}
+    mkdir -p "packaging/android/res/mipmap-$density"
+    rsvg-convert -w "$size" -h "$size" "$svg" -o "packaging/android/res/mipmap-$density/ic_launcher.png"
+done
+
+echo "Wrote packaging/windows/hushjar.ico, packaging/macos/Hushjar.icns and packaging/android/res"

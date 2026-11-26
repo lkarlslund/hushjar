@@ -6,15 +6,23 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lib]
+# The app is a library so that the desktop binary (src/main.rs) and the
+# Android build share it. Android loads a shared library, so
+# scripts/build-android.sh builds this target with `--crate-type cdylib`;
+# desktop builds keep the default rlib and link it into the binary.
+path = "src/lib.rs"
+
+[[bin]]
+name = "hushjar"
+path = "src/main.rs"
+
 [dependencies]
-arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 getrandom = "0.4"
 hushjar-agent = { version = "0.1.0", path = "../hushjar-agent" }
 hushjar-core.workspace = true
 png = { version = "0.18", optional = true }
-rfd = "0.18"
 serde_json = "1.0.154"
-slint.workspace = true
 thiserror = "2"
 zeroize = "1.9.2"
 
@@ -22,6 +30,17 @@ zeroize = "1.9.2"
 # the build through Slint (zbus, ksni, resvg) and zbus (futures-lite,
 # async-channel), so they add no new crates. zbus runs on async-io with its
 # own executor thread; no tokio runtime.
+# Desktop only: windowing through winit, the system clipboard and file
+# dialogs. Android has none of these crates' backends.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+rfd = "0.18"
+slint = { workspace = true, features = ["unstable-winit-030"] }
+
+# Android: Slint's NativeActivity backend instead of winit.
+[target.'cfg(target_os = "android")'.dependencies]
+slint = { workspace = true, features = ["backend-android-activity-06"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 async-channel = "2"
 futures-lite = "2"
@@ -30,6 +49,9 @@ resvg = { version = "0.49", default-features = false }
 zbus = "5"
 
 [dev-dependencies]
+# Slint's headless backend, to check the window's layout rules in unit tests
+# (src/layout_tests.rs). Internal to Slint, so pinned to its exact version.
+i-slint-backend-testing = "=1.19.1"
 # For the worker's tests against a Vaultwarden test server (including
 # src/worker/items.rs).
 ureq = { version = "3.5.2", features = ["json"] }

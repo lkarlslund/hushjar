@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The APK's manifest. scripts/build-android.sh adds the version and SDK
+     levels when it links the APK. There is no Java code of our own: the
+     activity is the platform's NativeActivity, which loads libhushjar.so. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.lkarlslund.hushjar">
+
+    <!-- Talking to Bitwarden or Vaultwarden. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="Hushjar"
+        android:icon="@mipmap/ic_launcher"
+        android:hasCode="false"
+        android:allowBackup="false"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+        <!-- The app handles size, rotation, keyboard and dark mode changes
+             itself; without configChanges Android would restart the
+             activity, and with it the native app, on each of them. -->
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode">
+            <meta-data android:name="android.app.lib_name" android:value="hushjar" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

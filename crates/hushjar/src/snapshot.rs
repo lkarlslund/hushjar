@@ -139,8 +139,35 @@ const STEPS: &[Step] = &[
         4000,
     ),
     ("09-ssh-allowed", |w| w.invoke_ssh_answer(true), 800),
-    // Back to the account pane, with its fingerprint phrase.
-    ("09b-account", |w| w.invoke_sign_in_cancel(), 1500),
+    // A phone-sized window: one pane at a time.
+    (
+        "09c-compact-tree",
+        |w| {
+            w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
+            w.invoke_focus_tree();
+        },
+        1000,
+    ),
+    (
+        "09d-compact-item",
+        |w| {
+            w.set_filter_text("github".into());
+            w.invoke_filter_edited("github".into());
+            w.invoke_filter_accepted();
+            w.set_details_open(true);
+        },
+        800,
+    ),
+    // Back to the account pane, with its fingerprint phrase, at full width.
+    (
+        "09e-account",
+        |w| {
+            w.window().set_size(slint::LogicalSize::new(1180.0, 740.0));
+            w.set_details_open(false);
+            w.invoke_sign_in_cancel();
+        },
+        1500,
+    ),
     ("10-locked-again", |w| w.invoke_lock_all(), 1500),
     (
         "10b-locked-pin",

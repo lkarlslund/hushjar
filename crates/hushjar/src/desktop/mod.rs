@@ -31,9 +31,17 @@ pub enum Error {
     #[error("not supported on this platform")]
     Unsupported,
     /// The desktop service needed for this is not running or not installed.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(dead_code, reason = "only the Linux implementation uses it")
+    )]
     #[error("{0} is not available")]
     Unavailable(String),
     /// A D-Bus call or connection failed.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(dead_code, reason = "only the Linux implementation uses it")
+    )]
     #[error("D-Bus: {0}")]
     Dbus(String),
     /// Reading or writing a file failed.
@@ -56,10 +64,9 @@ impl From<zbus::fdo::Error> for Error {
 }
 
 /// Whether Hushjar runs inside a Flatpak sandbox, where some services must
-/// be reached through portals instead.
-#[cfg(target_os = "linux")]
+/// be reached through portals instead. Always false off Linux.
 pub fn in_flatpak() -> bool {
-    std::path::Path::new("/.flatpak-info").exists()
+    cfg!(target_os = "linux") && std::path::Path::new("/.flatpak-info").exists()
 }
 
 /// The user ID of this process, read from `/proc` so no libc call is needed.

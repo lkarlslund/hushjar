@@ -144,7 +144,9 @@ pub(super) fn apply_prefs(win: &AppWindow, st: &Shared) {
     let scheme = match theme {
         ThemeChoice::Light => Some(ColorScheme::Light),
         ThemeChoice::Dark => Some(ColorScheme::Dark),
-        ThemeChoice::System if st.borrow().scheme_forced => Some(system_scheme(win)),
+        ThemeChoice::System if st.borrow().scheme_forced => {
+            Some(crate::platform::system_scheme(win))
+        }
         ThemeChoice::System => None,
     };
     if let Some(scheme) = scheme {
@@ -204,15 +206,4 @@ pub(super) fn wire_settings(w: &AppWindow, state: &Shared) {
         sysunlock::set_system_auth(&win, st, index as usize, on);
         render_settings(&win, st);
     });
-}
-
-/// The desktop's light or dark preference, as the window system reports it.
-fn system_scheme(win: &AppWindow) -> slint::language::ColorScheme {
-    use slint::language::ColorScheme;
-    use slint::winit_030::{WinitWindowAccessor, winit::window::Theme};
-    let theme = win.window().with_winit_window(|w| w.theme()).flatten();
-    match theme {
-        Some(Theme::Dark) => ColorScheme::Dark,
-        _ => ColorScheme::Light,
-    }
 }

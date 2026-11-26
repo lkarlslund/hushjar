@@ -866,10 +866,7 @@ fn save_attachment(win: &AppWindow, st: &Shared, index: i32) {
     let profile = st.borrow().accounts[account].profile.id.clone();
     let suggested = safe_file_name(&name);
     std::thread::spawn(move || {
-        let path = rfd::FileDialog::new()
-            .set_title("Save attachment")
-            .set_file_name(suggested)
-            .save_file();
+        let path = crate::dialogs::save_file("Save attachment", &suggested, ("All files", &["*"]));
         on_ui(move |win, st| {
             if let Some(path) = path {
                 start_download(win, st, &profile, item, attachment, &name, path, false);
@@ -1035,10 +1032,7 @@ fn add_attachment(win: &AppWindow, st: &Shared) {
         return;
     }
     std::thread::spawn(move || {
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Choose a file to attach")
-            .pick_file()
-        else {
+        let Some(path) = crate::dialogs::pick_file("Choose a file to attach", &[]) else {
             return;
         };
         let size = std::fs::metadata(&path).map(|m| m.len());
@@ -1262,9 +1256,7 @@ fn import_ssh_key(win: &AppWindow, st: &Shared) {
     }
     render_extras(win, st);
     std::thread::spawn(move || {
-        let picked = rfd::FileDialog::new()
-            .set_title("Choose a private key")
-            .pick_file();
+        let picked = crate::dialogs::pick_file("Choose a private key", &[]);
         let Some(path) = picked else {
             on_ui(|win, st| {
                 st.borrow_mut().extras.ssh_busy = false;
