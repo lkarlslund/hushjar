@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn accepts_padded_standard_base64_and_defaults() {
-        // Bitwarden's server has sent standard base64 in some versions.
+        // Standard base64 is accepted too, in case a server sends it.
         let options = json!({
             "challenge": "+/+/AA==",
             "allowCredentials": [{ "type": "public-key", "id": "AQID" }]
