@@ -2,8 +2,9 @@
 
 A desktop app for your secrets, written in Rust with [Slint](https://slint.dev).
 It works with Bitwarden and self-hosted Vaultwarden accounts. Linux on Wayland
-is the primary target; Windows and macOS builds are set up and checked by CI
-but have had little hands-on testing, and an early Android build runs. It
+is the primary target. Windows and macOS builds and a CI workflow are set up,
+but neither has been built or run on those systems yet. An early Android build
+runs in the emulator. It
 replaces VaultGoblin, an earlier Go and Wails client.
 
 The plan, including a checklist of Bitwarden features, is in
@@ -27,13 +28,23 @@ The plan, including a checklist of Bitwarden features, is in
   values; attachments can be opened, saved, added and deleted, passkeys
   listed and removed, folders renamed and deleted, and SSH keys generated or
   imported.
-- Verification codes, copying that is hidden from clipboard managers and
-  cleared after 30 seconds, and locking after 15 minutes without activity.
+- Verification codes, and copying that is hidden from clipboard managers and
+  cleared after a delay you choose.
+- Locking after a time you choose, when the screen locks or the computer
+  sleeps, with "lock" or "log out" as the action. Unlocking with system
+  authentication (polkit) while Hushjar runs.
+- Live updates from the server, and organisation policies (generator rules,
+  timeouts, personal ownership, Send, export and PIN restrictions).
+- The generator (passwords, passphrases, usernames), Send (text and files,
+  with expiry, view limits and passwords), and import and export in
+  Bitwarden's formats and from common browsers and password managers.
 - An SSH agent serving the vault's SSH keys, asking the first time or every
-  time a key is used.
+  time a key is used, with desktop notifications when the window is hidden.
+- A settings pane, a system tray icon and starting on login (Linux).
 
-Not yet: the generator, Send, import and export, settings, and
-organisation management. See the plan for the milestones.
+What is tested against a server and what is not is listed in the plan's
+status section. Not planned for now: Duo, single sign-on, website icons and
+the other "Later" and "Maybe" rows of the checklist.
 
 ## Layout
 
