@@ -136,6 +136,171 @@ impl Server {
             identity: format!("{base}/identity"),
         })
     }
+
+    /// Which Bitwarden cloud region this is, if any.
+    fn cloud_region(&self) -> Option<&'static str> {
+        match self.api.as_str() {
+            "https://api.bitwarden.com" => Some("com"),
+            "https://api.bitwarden.eu" => Some("eu"),
+            _ => None,
+        }
+    }
+
+    /// The web vault's address: Bitwarden's vault host for the cloud, the
+    /// server's own address when self-hosted.
+    pub fn web_vault(&self) -> String {
+        match self.cloud_region() {
+            Some(region) => format!("https://vault.bitwarden.{region}"),
+            None => self
+                .api
+                .strip_suffix("/api")
+                .unwrap_or(&self.api)
+                .to_string(),
+        }
+    }
+
+    /// The share link for a Send: `{send url}{access id}/{key}`, the key
+    /// material in unpadded URL-safe base64 after the `#` so it never
+    /// reaches a server.
+    ///
+    /// The Send address follows the Bitwarden clients'
+    /// `DefaultEnvironmentService.getSendUrl` (libs/common/src/platform/
+    /// services/default-environment.service.ts): the US cloud uses
+    /// `https://send.bitwarden.com/#`, the EU cloud
+    /// `https://vault.bitwarden.eu/#/send/`, and self-hosted servers
+    /// `{web vault}/#/send/`. The link itself is built as in
+    /// libs/tools/share/src/services/share-link.service.ts.
+    pub fn send_link(&self, access_id: &str, key_material: &[u8]) -> String {
+        let key = base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            key_material,
+        );
+        let prefix = match self.cloud_region() {
+            Some("com") => "https://send.bitwarden.com/#".to_string(),
+            _ => format!("{}/#/send/", self.web_vault()),
+        };
+        format!("{prefix}{access_id}/{key}")
+    }
+
+    /// Scheme, host and port of the API address, such as
+    /// `http://127.0.0.1:8000`.
+    fn origin(&self) -> &str {
+        let after_scheme = self.api.find("://").map_or(0, |i| i + 3);
+        match self.api[after_scheme..].find('/') {
+            Some(slash) => &self.api[..after_scheme + slash],
+            None => &self.api,
+        }
+    }
+}
+
+/// Where an uploaded file goes, from the server's reply to a new
+/// attachment or file Send.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileUpload {
+    /// Post the file to the server itself as `multipart/form-data`.
+    Direct,
+    /// Put the file to an Azure blob storage address signed by the server
+    /// (bitwarden.com and bitwarden.eu).
+    Azure(String),
+}
+
+impl FileUpload {
+    /// Reads `fileUploadType` (0 direct, 1 Azure) and `url` from a reply.
+    pub fn from_reply(reply: &Value) -> Result<Self, ApiError> {
+        match field_u64(reply, "fileUploadType") {
+            Some(0) => Ok(FileUpload::Direct),
+            Some(1) => field_str(reply, "url")
+                .map(|u| FileUpload::Azure(u.to_string()))
+                .ok_or(ApiError::Decode),
+            _ => Err(ApiError::Decode),
+        }
+    }
+}
+
+/// Largest file Bitwarden accepts as an attachment or Send: 500 MiB, the
+/// clients' limit (`fileSize > 524288000` is refused before upload).
+pub const MAX_FILE_BYTES: usize = 500 << 20;
+/// Largest encrypted file read from a server: the limit above plus room
+/// for the encryption overhead, which is at most 65 bytes.
+const FILE_LIMIT: u64 = (MAX_FILE_BYTES + 4096) as u64;
+/// Above this size Azure uploads go in a block and a block list, as the
+/// Bitwarden clients do (`MAX_SINGLE_BLOB_UPLOAD_SIZE`).
+const AZURE_SINGLE_PUT_LIMIT: usize = 256 << 20;
+
+/// A `multipart/form-data` body with one file part, as the Bitwarden
+/// clients send it (`BitwardenFileUploadService`): field `data`, the
+/// encrypted file name as the file name, `application/octet-stream`.
+/// Returns the content type, with its random boundary, and the body.
+pub fn multipart_body(
+    field_name: &str,
+    file_name: &str,
+    data: &[u8],
+) -> Result<(String, Vec<u8>), ApiError> {
+    let unsafe_char = |c: char| c == '"' || c == '\\' || c.is_control();
+    if field_name.chars().any(unsafe_char) || file_name.chars().any(unsafe_char) {
+        return Err(ApiError::Decode);
+    }
+    let boundary = format!(
+        "hushjar-{}",
+        crate::crypto::random_bytes::<16>()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    let head = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"{field_name}\"; filename=\"{file_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    );
+    let tail = format!("\r\n--{boundary}--\r\n");
+    let mut body = Vec::with_capacity(head.len() + data.len() + tail.len());
+    body.extend_from_slice(head.as_bytes());
+    body.extend_from_slice(data);
+    body.extend_from_slice(tail.as_bytes());
+    Ok((format!("multipart/form-data; boundary={boundary}"), body))
+}
+
+/// A date in the HTTP format (RFC 9110 IMF-fixdate), for `x-ms-date`.
+fn http_date(unix: u64) -> String {
+    const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let days = (unix / 86_400) as i64;
+    let rem = unix % 86_400;
+    let (year, month, day) = crate::vault::civil_date(days);
+    format!(
+        "{}, {day:02} {} {year:04} {:02}:{:02}:{:02} GMT",
+        DAYS[(days % 7) as usize],
+        MONTHS[(month - 1) as usize],
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+/// One query parameter of a URL, undecoded.
+fn query_param<'a>(url: &'a str, name: &str) -> Option<&'a str> {
+    let query = url.split_once('?')?.1.split('#').next()?;
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, _)| *k == name)
+        .map(|(_, v)| v)
+}
+
+/// The Azure block id the Bitwarden clients use for block 0: base64 of the
+/// index left-padded with zeros to 48 characters (`encodedBlockId`).
+fn azure_block_id(index: usize) -> String {
+    let padded = format!("{index:0>48}");
+    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, padded)
+}
+
+/// Percent-encodes the characters of a base64 value that are not safe in
+/// a query string.
+fn query_escape(value: &str) -> String {
+    value
+        .replace('+', "%2B")
+        .replace('/', "%2F")
+        .replace('=', "%3D")
 }
 
 /// This installation's identity towards the server. The identifier is
@@ -224,18 +389,32 @@ pub fn field_u64(value: &Value, key: &str) -> Option<u64> {
 
 pub struct Client {
     agent: ureq::Agent,
+    /// For file uploads and downloads, which may take longer than the
+    /// overall limit for API calls. Stalls are still cut off per read and
+    /// write.
+    files: ureq::Agent,
     pub server: Server,
 }
 
 impl Client {
     pub fn new(server: Server) -> Self {
+        let user_agent = format!("Hushjar/{}", env!("CARGO_PKG_VERSION"));
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(60)))
             .http_status_as_error(false)
-            .user_agent(format!("Hushjar/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(user_agent.clone())
+            .build();
+        let files = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(60 * 60)))
+            .timeout_connect(Some(Duration::from_secs(30)))
+            .timeout_per_read(Some(Duration::from_secs(120)))
+            .timeout_per_write(Some(Duration::from_secs(120)))
+            .http_status_as_error(false)
+            .user_agent(user_agent)
             .build();
         Self {
             agent: ureq::Agent::new_with_config(config),
+            files: ureq::Agent::new_with_config(files),
             server,
         }
     }
@@ -540,6 +719,265 @@ impl Client {
         let body = json!({ "name": encrypted_name });
         self.authed("POST", "/folders", token, Some(&body), SMALL_LIMIT)
     }
+
+    /// Asks where to download an attachment. The reply carries a `url`,
+    /// and the attachment's current `key` and `fileName`.
+    pub fn attachment_info(
+        &self,
+        token: &str,
+        cipher_id: &str,
+        attachment_id: &str,
+    ) -> Result<Value, ApiError> {
+        self.authed(
+            "GET",
+            &format!("/ciphers/{cipher_id}/attachment/{attachment_id}"),
+            token,
+            None,
+            SMALL_LIMIT,
+        )
+    }
+
+    /// Registers a new attachment: `{key, fileName, fileSize, ...}`. The
+    /// reply names the attachment and says where to upload it
+    /// (`attachmentId`, `fileUploadType`, `url`, `cipherResponse`).
+    pub fn create_attachment(
+        &self,
+        token: &str,
+        cipher_id: &str,
+        body: &Value,
+    ) -> Result<Value, ApiError> {
+        self.authed(
+            "POST",
+            &format!("/ciphers/{cipher_id}/attachment/v2"),
+            token,
+            Some(body),
+            SMALL_LIMIT * 16,
+        )
+    }
+
+    /// Uploads an attachment's encrypted contents to the server itself.
+    /// Same route in Vaultwarden (`post_attachment_v2_data` in
+    /// src/api/core/ciphers.rs) and Bitwarden (`postAttachmentFile`).
+    pub fn upload_attachment(
+        &self,
+        token: &str,
+        cipher_id: &str,
+        attachment_id: &str,
+        encrypted_name: &str,
+        data: &[u8],
+    ) -> Result<(), ApiError> {
+        self.post_file(
+            token,
+            &format!("/ciphers/{cipher_id}/attachment/{attachment_id}"),
+            encrypted_name,
+            data,
+        )
+    }
+
+    pub fn delete_attachment(
+        &self,
+        token: &str,
+        cipher_id: &str,
+        attachment_id: &str,
+    ) -> Result<(), ApiError> {
+        self.authed(
+            "DELETE",
+            &format!("/ciphers/{cipher_id}/attachment/{attachment_id}"),
+            token,
+            None,
+            SMALL_LIMIT * 16,
+        )
+        .map(|_| ())
+    }
+
+    /// Creates a text Send. Returns the server's copy.
+    pub fn create_send(&self, token: &str, send: &Value) -> Result<Value, ApiError> {
+        self.authed("POST", "/sends", token, Some(send), SMALL_LIMIT * 16)
+    }
+
+    /// Registers a file Send; the body carries `fileLength`. The reply says
+    /// where to upload (`fileUploadType`, `url`) and holds `sendResponse`.
+    pub fn create_file_send(&self, token: &str, send: &Value) -> Result<Value, ApiError> {
+        self.authed(
+            "POST",
+            "/sends/file/v2",
+            token,
+            Some(send),
+            SMALL_LIMIT * 16,
+        )
+    }
+
+    /// Uploads a file Send's encrypted contents to the server itself.
+    /// Vaultwarden checks that the file name equals the encrypted name it
+    /// stored (`post_send_file_v2_data` in src/api/core/sends.rs).
+    pub fn upload_send_file(
+        &self,
+        token: &str,
+        send_id: &str,
+        file_id: &str,
+        encrypted_name: &str,
+        data: &[u8],
+    ) -> Result<(), ApiError> {
+        self.post_file(
+            token,
+            &format!("/sends/{send_id}/file/{file_id}"),
+            encrypted_name,
+            data,
+        )
+    }
+
+    pub fn update_send(&self, token: &str, id: &str, send: &Value) -> Result<Value, ApiError> {
+        self.authed(
+            "PUT",
+            &format!("/sends/{id}"),
+            token,
+            Some(send),
+            SMALL_LIMIT * 16,
+        )
+    }
+
+    pub fn remove_send_password(&self, token: &str, id: &str) -> Result<Value, ApiError> {
+        self.authed(
+            "PUT",
+            &format!("/sends/{id}/remove-password"),
+            token,
+            None,
+            SMALL_LIMIT * 16,
+        )
+    }
+
+    pub fn delete_send(&self, token: &str, id: &str) -> Result<(), ApiError> {
+        self.authed("DELETE", &format!("/sends/{id}"), token, None, SMALL_LIMIT)
+            .map(|_| ())
+    }
+
+    /// Posts one encrypted file as `multipart/form-data` to an API path.
+    fn post_file(
+        &self,
+        token: &str,
+        path: &str,
+        encrypted_name: &str,
+        data: &[u8],
+    ) -> Result<(), ApiError> {
+        let (content_type, body) = multipart_body("data", encrypted_name, data)?;
+        let response = self
+            .files
+            .post(format!("{}{path}", self.server.api))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Bitwarden-Client-Version", CLIENT_VERSION)
+            .header("Content-Type", content_type)
+            .send(&body[..])
+            .map_err(Self::net)?;
+        let (status, value) = Self::read(response, SMALL_LIMIT)?;
+        if (200..300).contains(&status) {
+            Ok(())
+        } else {
+            Err(Self::rejection(status, &value))
+        }
+    }
+
+    /// Turns a file address from the server into an absolute URL. Relative
+    /// addresses are taken as relative to the API. Plain http is allowed
+    /// only on the server's own origin, which `Server::parse` already
+    /// limits to this computer.
+    fn file_url(&self, url: &str) -> Result<String, ApiError> {
+        let absolute = if url.starts_with('/') {
+            format!("{}{url}", self.server.api)
+        } else {
+            url.to_string()
+        };
+        let lower = absolute.to_ascii_lowercase();
+        let origin = self.server.origin().to_ascii_lowercase();
+        let same_origin = lower == origin
+            || lower
+                .strip_prefix(&origin)
+                .is_some_and(|rest| rest.starts_with(['/', '?']));
+        if lower.starts_with("https://") || same_origin {
+            Ok(absolute)
+        } else {
+            Err(ApiError::BadUrl(
+                "the server gave an unsafe file address".into(),
+            ))
+        }
+    }
+
+    /// Downloads an encrypted file from an address the server handed out.
+    /// No access token is sent: the address carries its own short-lived
+    /// grant, and may belong to a storage service rather than the server.
+    pub fn download(&self, url: &str) -> Result<Vec<u8>, ApiError> {
+        let url = self.file_url(url)?;
+        let mut response = self.files.get(&url).call().map_err(Self::net)?;
+        let status = response.status().as_u16();
+        if status != 200 {
+            return Err(ApiError::Rejected(format!(
+                "the file could not be downloaded (status {status})"
+            )));
+        }
+        response
+            .body_mut()
+            .with_config()
+            .limit(FILE_LIMIT)
+            .read_to_vec()
+            .map_err(|e| ApiError::Network(e.to_string()))
+    }
+
+    /// Uploads an encrypted file to a signed Azure blob address, as the
+    /// Bitwarden clients' `AzureFileUploadService` does: one `PUT` with
+    /// `x-ms-blob-type: BlockBlob` up to 256 MiB, otherwise one block and
+    /// a block list. Azure answers 201 Created.
+    pub fn upload_azure(&self, url: &str, data: &[u8]) -> Result<(), ApiError> {
+        self.upload_azure_in_parts(url, data, AZURE_SINGLE_PUT_LIMIT)
+    }
+
+    fn upload_azure_in_parts(
+        &self,
+        url: &str,
+        data: &[u8],
+        single_put_limit: usize,
+    ) -> Result<(), ApiError> {
+        let url = self.file_url(url)?;
+        let url = url.as_str();
+        let version = query_param(url, "sv").unwrap_or("").to_string();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let put = |target: &str, body: &[u8], blob_header: bool| {
+            let mut request = self
+                .files
+                .put(target)
+                .header("x-ms-date", http_date(now))
+                .header("x-ms-version", &version);
+            if blob_header {
+                request = request.header("x-ms-blob-type", "BlockBlob");
+            }
+            let response = request.send(body).map_err(Self::net)?;
+            match response.status().as_u16() {
+                201 => Ok(()),
+                status => Err(ApiError::Rejected(format!(
+                    "the file storage refused the upload (status {status})"
+                ))),
+            }
+        };
+        if data.len() <= single_put_limit {
+            return put(url, data, true);
+        }
+        let block = azure_block_id(0);
+        let joiner = if url.contains('?') { '&' } else { '?' };
+        put(
+            &format!("{url}{joiner}comp=block&blockid={}", query_escape(&block)),
+            data,
+            false,
+        )?;
+        let list = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?><BlockList><Latest>{block}</Latest></BlockList>"
+        );
+        put(
+            &format!("{url}{joiner}comp=blocklist"),
+            list.as_bytes(),
+            false,
+        )
+    }
 }
 
 /// Copies an object and returns it as a map, for editing JSON in place.
@@ -575,5 +1013,211 @@ mod tests {
         let v = json!({ "Kdf": 1, "kdfIterations": 3 });
         assert_eq!(field_u64(&v, "kdf"), Some(1));
         assert_eq!(field_u64(&v, "KdfIterations"), Some(3));
+    }
+
+    #[test]
+    fn web_vault_and_send_links() {
+        let key = [
+            0x3e, 0x0b, 0xa2, 0xd0, 0x52, 0xbc, 0xe5, 0xc3, 0x61, 0x04, 0x65, 0x87, 0x02, 0x50,
+            0x47, 0x07,
+        ];
+        let com = Server::parse("bitwarden.com").unwrap();
+        assert_eq!(com.web_vault(), "https://vault.bitwarden.com");
+        assert_eq!(
+            com.send_link("ct2APRQtJk-BLLDwAYqhRA", &key),
+            "https://send.bitwarden.com/#ct2APRQtJk-BLLDwAYqhRA/Pgui0FK85cNhBGWHAlBHBw"
+        );
+        let eu = Server::parse("bitwarden.eu").unwrap();
+        assert_eq!(eu.web_vault(), "https://vault.bitwarden.eu");
+        assert_eq!(
+            eu.send_link("abc", &key),
+            "https://vault.bitwarden.eu/#/send/abc/Pgui0FK85cNhBGWHAlBHBw"
+        );
+        let own = Server::parse("https://vault.example.org/vw/").unwrap();
+        assert_eq!(own.web_vault(), "https://vault.example.org/vw");
+        assert_eq!(
+            own.send_link("abc", &key),
+            "https://vault.example.org/vw/#/send/abc/Pgui0FK85cNhBGWHAlBHBw"
+        );
+        assert_eq!(own.origin(), "https://vault.example.org");
+    }
+
+    #[test]
+    fn multipart_layout() {
+        let (content_type, body) =
+            multipart_body("data", "2.aa+/|bb==|cc", b"\x00\x01bytes").unwrap();
+        let boundary = content_type
+            .strip_prefix("multipart/form-data; boundary=")
+            .unwrap();
+        let expected = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"data\"; filename=\"2.aa+/|bb==|cc\"\r\nContent-Type: application/octet-stream\r\n\r\n\x00\x01bytes\r\n--{boundary}--\r\n"
+        );
+        assert_eq!(body, expected.as_bytes());
+        assert!(multipart_body("data", "bad\"name", b"").is_err());
+        assert!(multipart_body("data", "bad\r\nname", b"").is_err());
+        let (other, _) = multipart_body("data", "x", b"").unwrap();
+        assert_ne!(other, content_type, "boundaries are random");
+    }
+
+    #[test]
+    fn small_helpers() {
+        assert_eq!(http_date(0), "Thu, 01 Jan 1970 00:00:00 GMT");
+        assert_eq!(http_date(784_111_777), "Sun, 06 Nov 1994 08:49:37 GMT");
+        let url = "https://x.blob.core.windows.net/c/f?sv=2020-04-08&se=2026&sig=a%2Fb";
+        assert_eq!(query_param(url, "sv"), Some("2020-04-08"));
+        assert_eq!(query_param(url, "sig"), Some("a%2Fb"));
+        assert_eq!(query_param(url, "none"), None);
+        assert_eq!(
+            azure_block_id(0),
+            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+        );
+        assert_eq!(query_escape("a+b/c="), "a%2Bb%2Fc%3D");
+        assert_eq!(
+            FileUpload::from_reply(&json!({ "fileUploadType": 0, "url": "/x" })).unwrap(),
+            FileUpload::Direct
+        );
+        assert_eq!(
+            FileUpload::from_reply(&json!({ "FileUploadType": 1, "Url": "https://blob" })).unwrap(),
+            FileUpload::Azure("https://blob".into())
+        );
+        assert!(FileUpload::from_reply(&json!({ "fileUploadType": 7 })).is_err());
+    }
+
+    #[test]
+    fn file_addresses_must_be_safe() {
+        let local = Client::new(Server::parse("http://127.0.0.1:18281").unwrap());
+        assert_eq!(
+            local.file_url("/attachments/a/b?token=t").unwrap(),
+            "http://127.0.0.1:18281/api/attachments/a/b?token=t"
+        );
+        assert!(
+            local
+                .file_url("http://127.0.0.1:18281/attachments/a")
+                .is_ok()
+        );
+        assert!(
+            local
+                .file_url("http://127.0.0.1:18281.evil.example/a")
+                .is_err()
+        );
+        assert!(local.file_url("http://127.0.0.1:9/a").is_err());
+        assert!(local.file_url("https://storage.example/a").is_ok());
+        let remote = Client::new(Server::parse("vault.example.org").unwrap());
+        assert!(remote.file_url("http://vault.example.org/a").is_err());
+        assert!(remote.file_url("file:///etc/passwd").is_err());
+    }
+
+    /// A request seen by the mock server: request line, headers, body.
+    type Seen = (String, Vec<(String, String)>, Vec<u8>);
+
+    /// A tiny HTTP server that answers every request with `status` and
+    /// returns what it received: (request line, headers, body).
+    fn mock_server(status: u16, requests: usize) -> (String, std::thread::JoinHandle<Vec<Seen>>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            while seen.len() < requests {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = stream;
+                while seen.len() < requests {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 {
+                        break;
+                    }
+                    let mut headers = Vec::new();
+                    loop {
+                        let mut h = String::new();
+                        reader.read_line(&mut h).unwrap();
+                        let h = h.trim_end();
+                        if h.is_empty() {
+                            break;
+                        }
+                        let (k, v) = h.split_once(':').unwrap();
+                        headers.push((k.to_ascii_lowercase(), v.trim().to_string()));
+                    }
+                    let length: usize = headers
+                        .iter()
+                        .find(|(k, _)| k == "content-length")
+                        .map_or(0, |(_, v)| v.parse().unwrap());
+                    let mut body = vec![0; length];
+                    reader.read_exact(&mut body).unwrap();
+                    seen.push((line.trim_end().to_string(), headers, body));
+                    write!(writer, "HTTP/1.1 {status} X\r\nContent-Length: 0\r\n\r\n").unwrap();
+                }
+            }
+            seen
+        });
+        (base, handle)
+    }
+
+    fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn azure_single_put() {
+        let (base, server) = mock_server(201, 1);
+        let client = Client::new(Server::parse(&base).unwrap());
+        let url = format!("{base}/container/file?sv=2024-08-04&sig=abc");
+        client.upload_azure(&url, b"encrypted bytes").unwrap();
+        let seen = server.join().unwrap();
+        let (line, headers, body) = &seen[0];
+        assert_eq!(line, "PUT /container/file?sv=2024-08-04&sig=abc HTTP/1.1");
+        assert_eq!(header(headers, "x-ms-blob-type"), Some("BlockBlob"));
+        assert_eq!(header(headers, "x-ms-version"), Some("2024-08-04"));
+        assert!(header(headers, "x-ms-date").unwrap().ends_with(" GMT"));
+        assert!(header(headers, "authorization").is_none());
+        assert_eq!(body, b"encrypted bytes");
+    }
+
+    #[test]
+    fn azure_block_upload_for_large_files() {
+        let (base, server) = mock_server(201, 2);
+        let client = Client::new(Server::parse(&base).unwrap());
+        let url = format!("{base}/c/f?sv=2024-08-04&sig=abc");
+        client
+            .upload_azure_in_parts(&url, b"0123456789", 4)
+            .unwrap();
+        let seen = server.join().unwrap();
+        let block = azure_block_id(0);
+        assert_eq!(
+            seen[0].0,
+            format!("PUT /c/f?sv=2024-08-04&sig=abc&comp=block&blockid={block} HTTP/1.1")
+        );
+        assert_eq!(header(&seen[0].1, "x-ms-blob-type"), None);
+        assert_eq!(seen[0].2, b"0123456789");
+        assert_eq!(
+            seen[1].0,
+            "PUT /c/f?sv=2024-08-04&sig=abc&comp=blocklist HTTP/1.1"
+        );
+        assert_eq!(
+            String::from_utf8(seen[1].2.clone()).unwrap(),
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?><BlockList><Latest>{block}</Latest></BlockList>"
+            )
+        );
+    }
+
+    #[test]
+    fn azure_refusal_is_an_error() {
+        let (base, server) = mock_server(403, 1);
+        let client = Client::new(Server::parse(&base).unwrap());
+        assert!(
+            client
+                .upload_azure(&format!("{base}/c/f?sv=1"), b"x")
+                .is_err()
+        );
+        server.join().unwrap();
+        assert!(
+            client
+                .upload_azure("http://elsewhere.example/c", b"x")
+                .is_err()
+        );
     }
 }

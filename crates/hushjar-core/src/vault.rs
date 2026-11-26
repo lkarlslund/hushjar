@@ -16,6 +16,7 @@ use zeroize::Zeroize;
 
 use crate::api::{field, field_str, field_u64};
 use crate::crypto::{PrivateKey, SymmetricKey};
+use crate::send::{self, SendEntry};
 
 /// Shown in place of a value that could not be decrypted.
 pub const UNREADABLE: &str = "⚠ could not decrypt";
@@ -28,6 +29,8 @@ pub enum VaultError {
     ReadOnlyType,
     #[error("an encrypted value could not be decrypted")]
     Unreadable,
+    #[error("a file Send needs a file name")]
+    MissingFileName,
 }
 
 /// The keys that open an account's items.
@@ -201,6 +204,21 @@ pub struct CustomField {
     pub linked_id: Option<u64>,
 }
 
+/// A file attached to an item. The contents are fetched on request with
+/// `Session::download_attachment`.
+#[derive(Clone, Debug, PartialEq, Eq, Zeroize)]
+pub struct Attachment {
+    #[zeroize(skip)]
+    pub id: String,
+    pub file_name: String,
+    /// Size of the encrypted file in bytes, as the server reports it.
+    #[zeroize(skip)]
+    pub size: u64,
+    /// The server's readable size, such as "4.2 KB".
+    #[zeroize(skip)]
+    pub size_name: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Zeroize)]
 pub struct PasswordEntry {
     pub password: String,
@@ -233,6 +251,9 @@ pub struct Item {
     pub ssh_key: SshKey,
     pub fields: Vec<CustomField>,
     pub password_history: Vec<PasswordEntry>,
+    /// Attached files. Saving an item never changes them; they are added
+    /// and removed with their own requests.
+    pub attachments: Vec<Attachment>,
     /// Values that could not be decrypted.
     pub unreadable: usize,
     /// The encrypted item as the server sent it. Empty for new items.
@@ -264,6 +285,7 @@ impl Item {
             ssh_key: SshKey::default(),
             fields: vec![],
             password_history: vec![],
+            attachments: vec![],
             unreadable: 0,
             raw: Value::Null,
         }
@@ -306,6 +328,7 @@ impl Drop for Item {
         self.ssh_key.zeroize();
         self.fields.zeroize();
         self.password_history.zeroize();
+        self.attachments.zeroize();
     }
 }
 
@@ -337,11 +360,16 @@ pub struct Vault {
     pub collections: Vec<Collection>,
     pub organizations: Vec<Organization>,
     pub items: Vec<Item>,
+    pub sends: Vec<SendEntry>,
 }
 
 impl Vault {
     pub fn item(&self, id: &str) -> Option<&Item> {
         self.items.iter().find(|i| i.id == id)
+    }
+
+    pub fn send(&self, id: &str) -> Option<&SendEntry> {
+        self.sends.iter().find(|s| s.id == id)
     }
 }
 
@@ -427,12 +455,15 @@ pub fn decrypt_sync(sync: &Value, keys: &Keys) -> Vault {
     for cipher in list("ciphers") {
         vault.items.push(decrypt_item(&cipher, keys));
     }
+    for send in list("sends") {
+        vault.sends.push(send::decrypt_send(&send, &keys.user));
+    }
     vault
 }
 
 /// The key that encrypts an item's fields: its own item key if it has one,
 /// otherwise the account or organisation key.
-fn item_key(raw: &Value, keys: &Keys) -> Option<SymmetricKey> {
+pub(crate) fn item_key(raw: &Value, keys: &Keys) -> Option<SymmetricKey> {
     let owner = keys.owner(field_str(raw, "organizationId"))?;
     match field_str(raw, "key") {
         Some(wrapped) => owner.unwrap_key(wrapped).ok(),
@@ -538,8 +569,33 @@ pub fn decrypt_item(raw: &Value, keys: &Keys) -> Item {
         }
     }
     item.unreadable = r.unreadable;
+    // Attachment names are never re-encrypted when the item is saved, so
+    // one that cannot be read does not stop the item from being edited.
+    let mut names = Reader {
+        key: key.as_ref(),
+        unreadable: 0,
+    };
+    if let Some(attachments) = field(raw, "attachments").and_then(Value::as_array) {
+        for a in attachments {
+            item.attachments.push(Attachment {
+                id: field_str(a, "id").unwrap_or_default().to_string(),
+                file_name: names.get(Some(a), "fileName"),
+                size: number_or_string(a, "size").unwrap_or(0),
+                size_name: field_str(a, "sizeName").unwrap_or_default().to_string(),
+            });
+        }
+    }
     item.raw = raw.clone();
     item
+}
+
+/// Reads a whole number sent either as a JSON number or as a string, as
+/// Vaultwarden and Bitwarden send file sizes as strings.
+pub(crate) fn number_or_string(value: &Value, name: &str) -> Option<u64> {
+    match field(value, name)? {
+        Value::String(s) => s.trim().parse().ok(),
+        other => other.as_u64(),
+    }
 }
 
 /// Encrypts `value`, or gives JSON null for an empty string, as Bitwarden does.
@@ -681,12 +737,29 @@ pub fn encrypt_item(item: &Item, keys: &Keys) -> Result<Value, VaultError> {
 
 /// The current time as an ISO 8601 UTC timestamp, as Bitwarden uses.
 pub fn now_iso() -> String {
+    iso_in(0)
+}
+
+/// The time `seconds` from now as an ISO 8601 UTC timestamp.
+pub fn iso_in(seconds: i64) -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs() as i64;
+        .as_secs() as i64
+        + seconds;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let (year, month, day) = civil_date(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+/// The (year, month, day) of a day counted from 1970-01-01, using Howard
+/// Hinnant's civil-from-days algorithm.
+pub(crate) fn civil_date(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -696,12 +769,7 @@ pub fn now_iso() -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    )
+    (year, month, day)
 }
 
 #[cfg(test)]
@@ -779,6 +847,34 @@ mod tests {
                 .as_str(),
             "Note"
         );
+    }
+
+    #[test]
+    fn attachments_are_listed_and_left_alone_by_edits() {
+        let keys = keys();
+        let item_key = SymmetricKey::generate();
+        let other = SymmetricKey::generate();
+        let raw = json!({
+            "id": "x", "type": 2, "key": keys.user.wrap_key(&item_key),
+            "name": item_key.encrypt_str("Note"), "secureNote": { "type": 0 },
+            "attachments": [
+                { "id": "a1", "fileName": item_key.encrypt_str("scan.pdf"), "key": item_key.wrap_key(&SymmetricKey::generate()),
+                  "size": "1234", "sizeName": "1.21 KB", "url": "https://x" },
+                { "id": "a2", "fileName": other.encrypt_str("lost.txt"), "key": null, "size": 99, "sizeName": "99 Bytes" },
+            ],
+        });
+        let item = decrypt_item(&raw, &keys);
+        assert_eq!(item.attachments.len(), 2);
+        assert_eq!(item.attachments[0].file_name, "scan.pdf");
+        assert_eq!(item.attachments[0].size, 1234);
+        assert_eq!(item.attachments[0].size_name, "1.21 KB");
+        assert_eq!(item.attachments[1].file_name, UNREADABLE);
+        assert_eq!(item.attachments[1].size, 99);
+        // An unreadable attachment name does not block editing the item,
+        // and the save request does not touch attachments at all.
+        assert_eq!(item.unreadable, 0);
+        let body = encrypt_item(&item, &keys).unwrap();
+        assert!(body.get("attachments").is_none() && body.get("attachments2").is_none());
     }
 
     #[test]

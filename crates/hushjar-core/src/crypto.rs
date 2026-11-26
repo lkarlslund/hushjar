@@ -150,6 +150,42 @@ impl SymmetricKey {
         self.encrypt(&key.to_bytes()).to_string()
     }
 
+    /// Encrypts file contents as Bitwarden's binary form of a type 2
+    /// encrypted string (the clients call it an `EncArrayBuffer`): one type
+    /// byte `2`, the 16-byte IV, the 32-byte HMAC-SHA256 over IV and
+    /// ciphertext, then the AES-256-CBC ciphertext.
+    ///
+    /// Layout from bitwarden/sdk-internal
+    /// `crates/bitwarden-crypto/src/enc_string/symmetric.rs`,
+    /// `EncString::to_buffer` / `from_buffer` (commit 5f84c8e), which the
+    /// clients' `encryptFileData` / `decryptFileData` call.
+    pub fn encrypt_buffer(&self, plaintext: &[u8]) -> Vec<u8> {
+        let EncString::AesCbcHmac { iv, ct, mac } = self.encrypt(plaintext) else {
+            unreachable!("encrypt makes type 2 values")
+        };
+        let mut out = Vec::with_capacity(1 + 16 + 32 + ct.len());
+        out.push(2);
+        out.extend_from_slice(&iv);
+        out.extend_from_slice(&mac);
+        out.extend_from_slice(&ct);
+        out
+    }
+
+    /// Decrypts file contents made by [`SymmetricKey::encrypt_buffer`].
+    /// Other encryption types are refused.
+    pub fn decrypt_buffer(&self, buffer: &[u8]) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        let (&kind, rest) = buffer.split_first().ok_or(CryptoError::Malformed)?;
+        if kind != 2 {
+            return Err(CryptoError::UnsupportedType(kind));
+        }
+        if rest.len() < 16 + 32 + 16 || (rest.len() - 48) % 16 != 0 {
+            return Err(CryptoError::Malformed);
+        }
+        let iv: [u8; 16] = rest[..16].try_into().expect("16 bytes");
+        let mac: [u8; 32] = rest[16..48].try_into().expect("32 bytes");
+        self.decrypt_cbc(&iv, &rest[48..], &mac)
+    }
+
     /// Derives a 32-byte subkey for Hushjar's own local formats.
     pub fn derive_local(&self, salt: &[u8], info: &str) -> Zeroizing<[u8; 32]> {
         let ikm = self.to_bytes();
@@ -377,6 +413,51 @@ pub fn stretch(master: &[u8; 32]) -> SymmetricKey {
     SymmetricKey::from_bytes(&both[..]).expect("64 bytes")
 }
 
+/// Iterations of PBKDF2-SHA256 for a Send's access password.
+pub const SEND_PASSWORD_ITERATIONS: u32 = 100_000;
+
+/// Derives a "shareable" key from 16 bytes of key material, as Bitwarden
+/// does for Sends: HKDF-SHA256 with salt `bitwarden-{name}`, the material
+/// as input key material, and `info`, expanded to 64 bytes.
+///
+/// From bitwarden/sdk-internal
+/// `crates/bitwarden-crypto/src/keys/shareable_key.rs`,
+/// `derive_shareable_key` (commit 5f84c8e): the PRK is
+/// HMAC-SHA256(key = "bitwarden-{name}", message = secret), which is
+/// HKDF-Extract with that salt, then HKDF-Expand to 64 bytes.
+pub fn shareable_key(material: &[u8; 16], name: &str, info: Option<&str>) -> SymmetricKey {
+    let salt = format!("bitwarden-{name}");
+    let hk = Hkdf::<Sha256>::new(Some(salt.as_bytes()), &material[..]);
+    let mut both = Zeroizing::new([0u8; 64]);
+    hk.expand(info.unwrap_or_default().as_bytes(), &mut both[..])
+        .expect("64 bytes is a valid HKDF length");
+    SymmetricKey::from_bytes(&both[..]).expect("64 bytes")
+}
+
+/// The key that encrypts a Send's fields and file, derived from the key
+/// material kept in the share link. bitwarden/sdk-internal
+/// `crates/bitwarden-send/src/send.rs`, `Send::derive_shareable_key`:
+/// name `send`, info `send`.
+pub fn send_key(material: &[u8; 16]) -> SymmetricKey {
+    shareable_key(material, "send", Some("send"))
+}
+
+/// The value sent to set or prove a Send's access password: base64 of
+/// PBKDF2-SHA256(password, salt = the Send's key material, 100 000
+/// iterations, 32 bytes). bitwarden/sdk-internal
+/// `crates/bitwarden-send/src/send.rs` (`SEND_ITERATIONS`,
+/// `SendAuthType::auth_data`) and `access.rs` (`hash_password_b64`).
+pub fn send_password_hash(password: &str, material: &[u8; 16]) -> Zeroizing<String> {
+    let mut out = Zeroizing::new([0u8; 32]);
+    pbkdf2::pbkdf2_hmac::<Sha256>(
+        password.as_bytes(),
+        &material[..],
+        SEND_PASSWORD_ITERATIONS,
+        &mut out[..],
+    );
+    Zeroizing::new(B64.encode(&out[..]))
+}
+
 /// An account's RSA private key, used to open organisation keys.
 pub struct PrivateKey(rsa::PrivateKey);
 
@@ -517,6 +598,87 @@ mod tests {
             format!("{:?}", SymmetricKey::generate()),
             "SymmetricKey([redacted])"
         );
+    }
+
+    #[test]
+    fn file_buffer_round_trip_and_layout() {
+        let key = SymmetricKey::generate();
+        let data: Vec<u8> = (0..1000u32).map(|i| i as u8).collect();
+        let buffer = key.encrypt_buffer(&data);
+        assert_eq!(buffer[0], 2);
+        // Type byte, IV, MAC, then whole blocks of ciphertext.
+        assert_eq!(buffer.len(), 1 + 16 + 32 + 1008);
+        assert_eq!(&key.decrypt_buffer(&buffer).unwrap()[..], &data[..]);
+        // The same bytes read as a type 2 string decrypt the same way.
+        let as_string = EncString::AesCbcHmac {
+            iv: buffer[1..17].try_into().unwrap(),
+            mac: buffer[17..49].try_into().unwrap(),
+            ct: buffer[49..].to_vec(),
+        };
+        assert_eq!(&key.decrypt(&as_string).unwrap()[..], &data[..]);
+
+        let mut tampered = buffer.clone();
+        tampered[60] ^= 1;
+        assert_eq!(
+            key.decrypt_buffer(&tampered),
+            Err(CryptoError::Authentication)
+        );
+        assert_eq!(
+            key.decrypt_buffer(&buffer[..buffer.len() - 1]),
+            Err(CryptoError::Malformed)
+        );
+        assert_eq!(key.decrypt_buffer(&[]), Err(CryptoError::Malformed));
+        let mut other_type = buffer;
+        other_type[0] = 0;
+        assert_eq!(
+            key.decrypt_buffer(&other_type),
+            Err(CryptoError::UnsupportedType(0))
+        );
+        assert_eq!(
+            &key.decrypt_buffer(&key.encrypt_buffer(b"")).unwrap()[..],
+            b""
+        );
+    }
+
+    /// Vectors from bitwarden/sdk-internal `shareable_key.rs` tests.
+    #[test]
+    fn shareable_key_vectors() {
+        let key = shareable_key(b"&/$%F1a895g67HlX", "test_key", None);
+        assert_eq!(
+            B64.encode(&key.to_bytes()[..]),
+            "4PV6+PcmF2w7YHRatvyMcVQtI7zvCyssv/wFWmzjiH6Iv9altjmDkuBD1aagLVaLezbthbSe+ktR+U6qswxNnQ=="
+        );
+        let key = shareable_key(b"67t9b5g67$%Dh89n", "test_key", Some("test"));
+        assert_eq!(
+            B64.encode(&key.to_bytes()[..]),
+            "F9jVQmrACGx9VUPjuzfMYDjr726JtL300Y3Yg+VYUnVQtQ1s8oImJ5xtp1KALC9h2nav04++1LDW4iFD+infng=="
+        );
+    }
+
+    /// Vector from bitwarden/sdk-internal `bitwarden-send/src/send.rs`,
+    /// `test_get_send_key`.
+    #[test]
+    fn send_key_vector() {
+        let user = SymmetricKey::from_bytes(&B64.decode("w2LO+nwV4oxwswVYCxlOfRUseXfvU03VzvKQHrqeklPgiMZrspUe6sOBToCnDn9Ay0tuCBn8ykVVRb7PWhub2Q==").unwrap()).unwrap();
+        let material = user
+            .decrypt(&"2.+1KUfOX8A83Xkwk1bumo/w==|Nczvv+DTkeP466cP/wMDnGK6W9zEIg5iHLhcuQG6s+M=|SZGsfuIAIaGZ7/kzygaVUau3LeOvJUlolENBOU+LX7g=".parse().unwrap())
+            .unwrap();
+        let material: [u8; 16] = material[..].try_into().unwrap();
+        assert_eq!(
+            B64.encode(&send_key(&material).to_bytes()[..]),
+            "IR9ImHGm6rRuIjiN7csj94bcZR5WYTJj5GtNfx33zm6tJCHUl+QZlpNPba8g2yn70KnOHsAODLcR0um6E3MAlg=="
+        );
+    }
+
+    #[test]
+    fn send_password_hash_is_salted_with_the_key() {
+        let a = send_password_hash("hunter2", &[1; 16]);
+        let b = send_password_hash("hunter2", &[2; 16]);
+        assert_ne!(a, b);
+        assert_eq!(B64.decode(a.as_str()).unwrap().len(), 32);
+        let mut expected = [0u8; 32];
+        pbkdf2::pbkdf2_hmac::<Sha256>(b"hunter2", &[1; 16], 100_000, &mut expected);
+        assert_eq!(a.as_str(), B64.encode(expected));
     }
 
     #[test]
