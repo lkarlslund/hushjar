@@ -2147,13 +2147,19 @@ name = "hushjar"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "async-channel",
+ "futures-lite",
  "getrandom 0.4.3",
  "hushjar-agent",
  "hushjar-core",
+ "ksni",
  "png",
+ "resvg",
  "serde_json",
  "slint",
  "slint-build",
+ "thiserror 2.0.21",
+ "zbus",
  "zeroize",
 ]
 

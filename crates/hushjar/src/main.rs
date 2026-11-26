@@ -2,6 +2,7 @@ slint::include_modules!();
 
 mod app;
 mod clipboard;
+mod desktop;
 #[cfg(test)]
 mod mock;
 mod model;

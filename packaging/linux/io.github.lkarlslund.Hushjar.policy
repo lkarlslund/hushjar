@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Lets Hushjar unlock vaults with system authentication: the desktop's
+  polkit agent asks for the user's own login password (or a fingerprint,
+  where PAM for polkit-1 is set up for it). Install as root into
+  /usr/share/polkit-1/actions; scripts/install-desktop.sh prints the command.
+-->
+<policyconfig>
+  <vendor>Hushjar</vendor>
+  <vendor_url>https://github.com/lkarlslund/hushjar</vendor_url>
+  <icon_name>io.github.lkarlslund.Hushjar</icon_name>
+  <action id="io.github.lkarlslund.Hushjar.unlock">
+    <description>Unlock Hushjar</description>
+    <message>Authenticate to unlock your Hushjar vaults</message>
+    <defaults>
+      <allow_any>auth_self</allow_any>
+      <allow_inactive>auth_self</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+</policyconfig>
