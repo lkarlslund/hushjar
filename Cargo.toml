@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["crates/hushjar", "crates/hushjar-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace.dependencies]
+hushjar-core = { path = "crates/hushjar-core" }
+slint = "1.19"
+slint-build = "1.19"
+
+[workspace.lints.rust]
+# Slint's generated code allows unsafe locally, so the app crate uses deny.
+# hushjar-core forbids unsafe outright in its lib.rs.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
