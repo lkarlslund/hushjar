@@ -19,17 +19,10 @@ pub(super) fn policies(state: &State, account: usize) -> Option<&Policies> {
 }
 
 /// Whether an organisation forbids unlocking this account with a PIN. Read by
-/// the PIN settings and the unlock screen, which land in other branches.
-#[allow(dead_code)]
+/// the PIN settings and the unlock screen.
 pub(super) fn pin_disabled(state: &State, account: usize) -> bool {
     policies(state, account).is_some_and(|p| p.pin_unlock_disabled)
 }
-
-/// Answers "log in with device" requests for an account.
-///
-/// Placeholder: the sign-in job replaces this function (in app/sign_in.rs)
-/// and this one is removed at merge.
-pub(super) fn check_login_requests(_win: &AppWindow, _st: &Shared, _account: usize) {}
 
 /// The longest idle time the vault-timeout policies allow, over all of them,
 /// and the action they force. Log out wins over lock.

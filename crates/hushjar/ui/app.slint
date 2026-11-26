@@ -5,7 +5,9 @@ import { VaultTree } from "tree.slint";
 import { DetailsPane } from "details.slint";
 import { SettingsData, AccountSecurity } from "settings.slint";
 import { GeneratorData, GeneratedValue } from "generator.slint";
+import { SignInData, UnlockData, AccountData, LoginRequestData, LoginRequestBanner } from "access.slint";
 import { TransferData } from "transfer.slint";
+import { ItemExtras, MenuEntry, AttachmentRow, PasskeyRow, CollectionChoice } from "item-extras.slint";
 import { SendsData, SendRow } from "sends.slint";
 import {
     AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode,
@@ -15,11 +17,12 @@ import {
 export {
     AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode,
     RowIcon, RowKind, SignInForm, TreeRow, Palette, SettingsData, AccountSecurity, GeneratorData, GeneratedValue, TransferData,
+    ItemExtras, MenuEntry, AttachmentRow, PasskeyRow, CollectionChoice,
     SendsData, SendRow, Platform,
 }
 
 // One entry of the top bar's overflow menu.
-component MenuEntry inherits Rectangle {
+component TopMenuEntry inherits Rectangle {
     in property <image> icon;
     in property <string> text;
     callback clicked;
@@ -52,6 +55,7 @@ component MenuEntry inherits Rectangle {
         clicked => { root.clicked(); }
     }
 }
+export { SignInData, UnlockData, AccountData, LoginRequestData }
 
 component TopBar inherits Rectangle {
     in property <string> sync-text;
@@ -198,11 +202,11 @@ component TopBar inherits Rectangle {
             drop-shadow-color: #00000033;
             VerticalLayout {
                 padding: 4px;
-                MenuEntry { icon: Icons.dice; text: "Generator"; clicked => { menu.close(); root.generator(); } }
-                MenuEntry { icon: Icons.send; text: "Send"; clicked => { menu.close(); root.send(); } }
-                MenuEntry { icon: Icons.transfer; text: "Import and export"; clicked => { menu.close(); root.transfer(); } }
-                MenuEntry { icon: Icons.settings; text: "Settings"; clicked => { menu.close(); root.settings(); } }
-                if Platform.ssh-agent: MenuEntry {
+                TopMenuEntry { icon: Icons.dice; text: "Generator"; clicked => { menu.close(); root.generator(); } }
+                TopMenuEntry { icon: Icons.send; text: "Send"; clicked => { menu.close(); root.send(); } }
+                TopMenuEntry { icon: Icons.transfer; text: "Import and export"; clicked => { menu.close(); root.transfer(); } }
+                TopMenuEntry { icon: Icons.settings; text: "Settings"; clicked => { menu.close(); root.settings(); } }
+                if Platform.ssh-agent: TopMenuEntry {
                     icon: Icons.terminal;
                     text: root.agent-label;
                     clicked => { menu.close(); root.agent-clicked(); }
@@ -516,7 +520,7 @@ export component AppWindow inherits Window {
     // SSH agent approval prompt
     if root.ssh-prompt != "": Rectangle {
         x: (parent.width - self.width) / 2;
-        y: 52px;
+        y: 52px + root.safe-area-insets.top;
         width: min(560px, parent.width - 32px);
         height: prompt-layout.preferred-height;
         border-radius: Theme.radius;
@@ -551,6 +555,13 @@ export component AppWindow inherits Window {
                 ActionButton { text: "Allow"; primary: true; clicked => { root.ssh-answer(true); } }
             }
         }
+    }
+
+    // Another device asks to sign in; waits while an SSH prompt shows.
+    if root.ssh-prompt == "": LoginRequestBanner {
+        x: (parent.width - self.width) / 2;
+        y: 52px + root.safe-area-insets.top;
+        width: min(560px, parent.width - 32px);
     }
 
     // Toast

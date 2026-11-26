@@ -52,7 +52,8 @@ zbus = "5"
 # Slint's headless backend, to check the window's layout rules in unit tests
 # (src/layout_tests.rs). Internal to Slint, so pinned to its exact version.
 i-slint-backend-testing = "=1.19.1"
-# For the worker's test against a Vaultwarden test server.
+# For the worker's tests against a Vaultwarden test server (including
+# src/worker/items.rs).
 ureq = { version = "3.5.2", features = ["json"] }
 uuid = { version = "1.29.3", features = ["v4"] }
 

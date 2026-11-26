@@ -1,0 +1,710 @@
+import { LineEdit } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { Icon, IconButton, ActionButton, Toggle, Picker } from "widgets.slint";
+import { Hint } from "cards.slint";
+import { Platform } from "types.slint";
+
+// Item and folder actions beyond plain editing: the item's "more" menu,
+// the master password re-prompt, attachments, passkeys, organisation moves,
+// folder rename and delete, and SSH key tools. The Rust side (app/extras.rs)
+// fills ItemExtras and answers its callbacks.
+
+// One entry of the item's "more" menu. `id` tells Rust which was picked.
+export struct MenuEntry {
+    id: string,
+    label: string,
+    // Shows a check mark when `checked`.
+    toggle: bool,
+    checked: bool,
+    enabled: bool,
+}
+
+export struct AttachmentRow {
+    name: string,
+    size: string,
+}
+
+export struct PasskeyRow {
+    site: string,
+    user: string,
+    created: string,
+}
+
+export struct CollectionChoice {
+    name: string,
+    checked: bool,
+}
+
+export global ItemExtras {
+    // The "more" menu. Bump the requests to open or close it from Rust.
+    in property <[MenuEntry]> menu;
+    in-out property <int> menu-open-request;
+    in-out property <int> menu-close-request;
+    callback menu-picked(string);
+
+    // Master password re-prompt: `reprompt-locked` hides the item's secrets.
+    in property <bool> reprompt-locked;
+    in property <bool> reprompt-busy;
+    in property <string> reprompt-error;
+    // The item's setting, as shown while editing.
+    in property <bool> reprompt;
+    callback verify(string);
+    callback set-reprompt(bool);
+
+    // Attachments
+    in property <[AttachmentRow]> attachments;
+    in property <bool> attachments-visible;
+    // Saving and opening files (not while the re-prompt is unanswered).
+    in property <bool> attachments-open;
+    in property <bool> can-add-attachment;
+    in property <bool> can-delete-attachment;
+    in property <string> attachment-busy;
+    in-out property <int> confirm-attachment: -1;
+    callback save-attachment(int);
+    callback open-attachment(int);
+    callback delete-attachment(int);
+    callback add-attachment();
+
+    // Passkeys on a login
+    in property <[PasskeyRow]> passkeys;
+    in property <bool> can-remove-passkey;
+    in-out property <int> confirm-passkey: -1;
+    callback remove-passkey(int);
+
+    // Moving to an organisation (1) or changing collections (2); 0 is closed.
+    in property <int> move-mode;
+    in property <[string]> organizations;
+    in property <int> organization-index;
+    in property <[CollectionChoice]> collections;
+    in property <bool> move-ready;
+    in property <bool> move-busy;
+    callback pick-organization(int);
+    callback toggle-collection(int, bool);
+    callback confirm-move();
+    callback cancel-move();
+
+    // A folder shown in the right pane. Mode 1 renames, 2 confirms deleting.
+    in property <bool> folder-actions;
+    in property <string> folder-name;
+    in property <bool> folder-can-delete;
+    in property <string> folder-delete-note;
+    in property <bool> folder-busy;
+    in-out property <int> folder-mode;
+    callback rename-folder(string);
+    callback delete-folder();
+
+    // SSH key tools while editing an SSH key item.
+    in property <bool> ssh-tools;
+    in property <bool> ssh-busy;
+    in property <bool> ssh-passphrase-needed;
+    in property <string> ssh-error;
+    in-out property <int> ssh-algorithm;
+    callback generate-ssh-key(int);
+    callback import-ssh-key();
+    callback ssh-passphrase(string);
+    callback cancel-ssh-import();
+}
+
+// A titled card in the item view, like the field sections.
+component ExtraCard inherits Rectangle {
+    in property <string> title;
+    in property <bool> editing;
+
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: root.editing ? Theme.honey.with-alpha(0.55) : Theme.border;
+
+    VerticalLayout {
+        padding-bottom: 6px;
+        HorizontalLayout {
+            padding-left: 16px;
+            Text {
+                text: root.title;
+                height: 30px;
+                vertical-alignment: bottom;
+                font-size: Theme.small;
+                font-weight: 600;
+                color: Theme.muted;
+            }
+        }
+        @children
+    }
+}
+
+component Divider inherits HorizontalLayout {
+    padding-left: 16px;
+    Rectangle {
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+// The "⋯" button in the item header and its menu.
+export component ItemMenu inherits Rectangle {
+    width: 30px;
+    height: 30px;
+
+    property <int> open-request: ItemExtras.menu-open-request;
+    changed open-request => { popup.show(); }
+    property <int> close-request: ItemExtras.menu-close-request;
+    changed close-request => { popup.close(); }
+
+    IconButton {
+        icon: Icons.dots;
+        label: "More actions";
+        size: 30px;
+        clicked => { popup.show(); }
+    }
+
+    popup := PopupWindow {
+        x: root.width - 250px;
+        y: root.height + 2px;
+        width: 250px;
+        Rectangle {
+            background: Theme.surface;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: Theme.border;
+            drop-shadow-blur: 10px;
+            drop-shadow-color: #00000033;
+            VerticalLayout {
+                padding: 3px;
+                for entry in ItemExtras.menu: Rectangle {
+                    height: 30px;
+                    border-radius: 4px;
+                    opacity: entry.enabled ? 1 : 0.45;
+                    background: entry-touch.has-hover && entry.enabled ? Theme.hover : transparent;
+                    accessible-role: button;
+                    accessible-label: entry.toggle ? entry.label + (entry.checked ? ", on" : ", off") : entry.label;
+                    accessible-enabled: entry.enabled;
+                    accessible-action-default => { if (entry.enabled) { ItemExtras.menu-picked(entry.id); } }
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 8px;
+                        Text {
+                            text: entry.label;
+                            vertical-alignment: center;
+                            color: Theme.text;
+                            horizontal-stretch: 1;
+                        }
+                        if entry.toggle: VerticalLayout {
+                            alignment: center;
+                            Icon {
+                                source: Icons.check;
+                                width: 14px;
+                                height: 14px;
+                                tint: Theme.honey-text;
+                                opacity: entry.checked ? 1 : 0;
+                            }
+                        }
+                    }
+                    entry-touch := TouchArea {
+                        enabled: entry.enabled;
+                        mouse-cursor: pointer;
+                        clicked => { ItemExtras.menu-picked(entry.id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Asks for the master password before showing an item's hidden values.
+export component RepromptBanner inherits Rectangle {
+    background: Theme.honey.with-alpha(0.12);
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.honey.with-alpha(0.4);
+
+    VerticalLayout {
+        padding: 12px;
+        padding-left: 14px;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                Icon { source: Icons.lock; tint: Theme.honey-text; }
+            }
+            Text {
+                text: "This item asks for your master password before it shows hidden values.";
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                color: Theme.text;
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            password := LineEdit {
+                horizontal-stretch: 1;
+                input-type: InputType.password;
+                placeholder-text: "Master password";
+                enabled: !ItemExtras.reprompt-busy;
+                accepted(text) => {
+                    ItemExtras.verify(text);
+                    self.text = "";
+                }
+            }
+            ActionButton {
+                text: ItemExtras.reprompt-busy ? "Checking…" : "Continue";
+                primary: true;
+                enabled: !ItemExtras.reprompt-busy;
+                clicked => {
+                    ItemExtras.verify(password.text);
+                    password.text = "";
+                }
+            }
+        }
+        if ItemExtras.reprompt-error != "": Text {
+            text: ItemExtras.reprompt-error;
+            font-size: Theme.small;
+            color: Theme.danger;
+        }
+    }
+}
+
+// The re-prompt switch while editing.
+export component RepromptRow inherits HorizontalLayout {
+    spacing: 8px;
+    VerticalLayout {
+        alignment: center;
+        Toggle {
+            checked: ItemExtras.reprompt;
+            toggled => { ItemExtras.set-reprompt(self.checked); }
+        }
+    }
+    Text {
+        text: "Ask for the master password before showing hidden values";
+        vertical-alignment: center;
+        wrap: word-wrap;
+        horizontal-stretch: 1;
+        color: Theme.text;
+    }
+}
+
+export component AttachmentsCard inherits ExtraCard {
+    title: "Attachments";
+
+    for file[i] in ItemExtras.attachments: VerticalLayout {
+        if i > 0: Divider {}
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 10px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+            spacing: 6px;
+            min-height: 44px;
+
+            VerticalLayout {
+                alignment: center;
+                Icon { source: Icons.paperclip; }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: file.name;
+                    color: Theme.text;
+                    overflow: elide;
+                }
+                Text {
+                    text: ItemExtras.confirm-attachment == i ? "Delete this file from the item?" : file.size;
+                    font-size: Theme.small;
+                    color: ItemExtras.confirm-attachment == i ? Theme.danger : Theme.muted;
+                }
+            }
+            if ItemExtras.confirm-attachment != i && ItemExtras.attachments-open && Platform.open-files: VerticalLayout {
+                alignment: center;
+                ActionButton {
+                    text: "Open";
+                    enabled: ItemExtras.attachment-busy == "";
+                    clicked => { ItemExtras.open-attachment(i); }
+                }
+            }
+            if ItemExtras.confirm-attachment != i && ItemExtras.attachments-open && Platform.file-dialogs: VerticalLayout {
+                alignment: center;
+                ActionButton {
+                    text: "Save…";
+                    enabled: ItemExtras.attachment-busy == "";
+                    clicked => { ItemExtras.save-attachment(i); }
+                }
+            }
+            if ItemExtras.confirm-attachment != i && ItemExtras.can-delete-attachment: VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: Icons.trash;
+                    label: "Delete " + file.name;
+                    clicked => { ItemExtras.confirm-attachment = i; }
+                }
+            }
+            if ItemExtras.confirm-attachment == i: VerticalLayout {
+                alignment: center;
+                ActionButton {
+                    text: "Cancel";
+                    clicked => { ItemExtras.confirm-attachment = -1; }
+                }
+            }
+            if ItemExtras.confirm-attachment == i: VerticalLayout {
+                alignment: center;
+                ActionButton {
+                    text: "Delete";
+                    danger: true;
+                    enabled: ItemExtras.attachment-busy == "";
+                    clicked => {
+                        ItemExtras.confirm-attachment = -1;
+                        ItemExtras.delete-attachment(i);
+                    }
+                }
+            }
+        }
+    }
+
+    if ItemExtras.attachments.length > 0 && !ItemExtras.attachments-open: HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        Hint {
+            text: ItemExtras.reprompt-locked ? "Enter your master password above to open or save these files." : "Sign in again to open or save these files.";
+        }
+    }
+    if ItemExtras.attachment-busy != "": HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 2px;
+        Text {
+            text: ItemExtras.attachment-busy;
+            font-size: Theme.small;
+            color: Theme.muted;
+        }
+    }
+    if ItemExtras.can-add-attachment && Platform.file-dialogs: HorizontalLayout {
+        padding-left: 10px;
+        padding-top: 4px;
+        spacing: 10px;
+        alignment: start;
+        ActionButton {
+            text: "Add attachment…";
+            has-icon: true;
+            icon: Icons.plus;
+            enabled: ItemExtras.attachment-busy == "";
+            clicked => { ItemExtras.add-attachment(); }
+        }
+        if ItemExtras.attachments.length == 0: Hint {
+            text: "Files of up to 500 MB, encrypted like the rest of the item.";
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component PasskeysCard inherits ExtraCard {
+    title: "Passkeys";
+
+    for key[i] in ItemExtras.passkeys: VerticalLayout {
+        if i > 0: Divider {}
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 10px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+            spacing: 6px;
+            min-height: 44px;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: key.site;
+                    color: Theme.text;
+                    overflow: elide;
+                }
+                Text {
+                    text: ItemExtras.confirm-passkey == i ? "Remove this passkey? You will no longer be able to sign in with it." : key.user + (key.created != "" ? " · created " + key.created : "");
+                    font-size: Theme.small;
+                    wrap: word-wrap;
+                    color: ItemExtras.confirm-passkey == i ? Theme.danger : Theme.muted;
+                }
+            }
+            if ItemExtras.confirm-passkey != i && ItemExtras.can-remove-passkey: VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: Icons.trash;
+                    label: "Remove the passkey for " + key.site;
+                    clicked => { ItemExtras.confirm-passkey = i; }
+                }
+            }
+            if ItemExtras.confirm-passkey == i: VerticalLayout {
+                alignment: center;
+                ActionButton {
+                    text: "Cancel";
+                    clicked => { ItemExtras.confirm-passkey = -1; }
+                }
+            }
+            if ItemExtras.confirm-passkey == i: VerticalLayout {
+                alignment: center;
+                ActionButton {
+                    text: "Remove";
+                    danger: true;
+                    clicked => {
+                        ItemExtras.confirm-passkey = -1;
+                        ItemExtras.remove-passkey(i);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Picks an organisation and collections for a personal item, or changes an
+// organisation item's collections.
+export component MoveCard inherits Rectangle {
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.honey.with-alpha(0.55);
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+
+        Text {
+            text: ItemExtras.move-mode == 1 ? "Move to an organisation" : "Collections";
+            font-size: 14px;
+            font-weight: 600;
+            color: Theme.text;
+        }
+        if ItemExtras.move-mode == 1: HorizontalLayout {
+            spacing: 10px;
+            Text {
+                text: "Organisation";
+                vertical-alignment: center;
+                color: Theme.text;
+            }
+            Picker {
+                horizontal-stretch: 1;
+                options: ItemExtras.organizations;
+                current: ItemExtras.organization-index;
+                enabled: !ItemExtras.move-busy;
+                picked(index) => { ItemExtras.pick-organization(index); }
+            }
+        }
+        Text {
+            text: "Collections";
+            font-size: Theme.small;
+            color: Theme.muted;
+        }
+        for choice[i] in ItemExtras.collections: HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                Toggle {
+                    checked: choice.checked;
+                    enabled: !ItemExtras.move-busy;
+                    toggled => { ItemExtras.toggle-collection(i, self.checked); }
+                }
+            }
+            Text {
+                text: choice.name;
+                vertical-alignment: center;
+                color: Theme.text;
+                horizontal-stretch: 1;
+            }
+        }
+        if ItemExtras.collections.length == 0: Hint {
+            text: "There are no collections here you can add items to.";
+        }
+        if ItemExtras.move-mode == 1: Hint {
+            text: "The organisation will own this item, and it cannot be moved back to your own vault. Its attachments move with it.";
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            ActionButton {
+                text: "Cancel";
+                enabled: !ItemExtras.move-busy;
+                clicked => { ItemExtras.cancel-move(); }
+            }
+            ActionButton {
+                text: ItemExtras.move-busy ? "Saving…" : ItemExtras.move-mode == 1 ? "Move" : "Save";
+                primary: true;
+                enabled: ItemExtras.move-ready && !ItemExtras.move-busy;
+                clicked => { ItemExtras.confirm-move(); }
+            }
+        }
+    }
+}
+
+// Rename and delete for the folder shown in the right pane.
+export component FolderActions inherits VerticalLayout {
+    spacing: 10px;
+
+    if ItemExtras.folder-mode == 0: HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        ActionButton {
+            text: "Rename…";
+            has-icon: true;
+            icon: Icons.pencil;
+            enabled: !ItemExtras.folder-busy;
+            clicked => { ItemExtras.folder-mode = 1; }
+        }
+        if ItemExtras.folder-can-delete: ActionButton {
+            text: "Delete…";
+            danger: true;
+            has-icon: true;
+            icon: Icons.trash;
+            enabled: !ItemExtras.folder-busy;
+            clicked => { ItemExtras.folder-mode = 2; }
+        }
+    }
+    if ItemExtras.folder-mode == 1: HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        new-name := LineEdit {
+            width: 280px;
+            text: ItemExtras.folder-name;
+            placeholder-text: "Folder name";
+            enabled: !ItemExtras.folder-busy;
+            init => { self.focus(); }
+            accepted(text) => { ItemExtras.rename-folder(text); }
+        }
+        ActionButton {
+            text: "Cancel";
+            enabled: !ItemExtras.folder-busy;
+            clicked => { ItemExtras.folder-mode = 0; }
+        }
+        ActionButton {
+            text: ItemExtras.folder-busy ? "Renaming…" : "Rename";
+            primary: true;
+            enabled: !ItemExtras.folder-busy;
+            clicked => { ItemExtras.rename-folder(new-name.text); }
+        }
+    }
+    if ItemExtras.folder-mode == 1: Hint {
+        text: "Use / to put it inside another folder, as in Work/Projects.";
+        horizontal-alignment: center;
+    }
+    if ItemExtras.folder-mode == 2: HorizontalLayout {
+        alignment: center;
+        Rectangle {
+            width: min(460px, root.width - 32px);
+            height: confirm.preferred-height;
+            background: Theme.danger.with-alpha(0.08);
+            border-radius: Theme.radius;
+            border-width: 1px;
+            border-color: Theme.danger.with-alpha(0.35);
+            confirm := VerticalLayout {
+                padding: 12px;
+                spacing: 10px;
+                Text {
+                    text: ItemExtras.folder-delete-note;
+                    wrap: word-wrap;
+                    color: Theme.text;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    ActionButton {
+                        text: "Cancel";
+                        enabled: !ItemExtras.folder-busy;
+                        clicked => { ItemExtras.folder-mode = 0; }
+                    }
+                    ActionButton {
+                        text: ItemExtras.folder-busy ? "Deleting…" : "Delete folder";
+                        danger: true;
+                        enabled: !ItemExtras.folder-busy;
+                        clicked => { ItemExtras.delete-folder(); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Generate or import the key of an SSH key item while editing.
+export component SshKeyTools inherits ExtraCard {
+    title: "Key";
+    editing: true;
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        padding-top: 4px;
+        padding-bottom: 6px;
+        spacing: 8px;
+        Picker {
+            width: 210px;
+            options: ["Ed25519 (recommended)", "RSA 3072", "RSA 4096", "RSA 2048"];
+            current: ItemExtras.ssh-algorithm;
+            enabled: !ItemExtras.ssh-busy;
+            picked(index) => { ItemExtras.ssh-algorithm = index; }
+        }
+        ActionButton {
+            text: ItemExtras.ssh-busy ? "Working…" : "Generate key";
+            has-icon: true;
+            icon: Icons.dice;
+            enabled: !ItemExtras.ssh-busy;
+            clicked => { ItemExtras.generate-ssh-key(ItemExtras.ssh-algorithm); }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        if Platform.file-dialogs: ActionButton {
+            text: "Import key…";
+            enabled: !ItemExtras.ssh-busy;
+            clicked => { ItemExtras.import-ssh-key(); }
+        }
+    }
+    if ItemExtras.ssh-passphrase-needed: HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        padding-top: 2px;
+        padding-bottom: 6px;
+        spacing: 8px;
+        Text {
+            text: "This key has a passphrase:";
+            vertical-alignment: center;
+            color: Theme.text;
+        }
+        passphrase := LineEdit {
+            horizontal-stretch: 1;
+            input-type: InputType.password;
+            placeholder-text: "Key passphrase";
+            enabled: !ItemExtras.ssh-busy;
+            init => { self.focus(); }
+            accepted(text) => {
+                ItemExtras.ssh-passphrase(text);
+                self.text = "";
+            }
+        }
+        ActionButton {
+            text: "Cancel";
+            clicked => { ItemExtras.cancel-ssh-import(); }
+        }
+        ActionButton {
+            text: "Unlock key";
+            primary: true;
+            enabled: !ItemExtras.ssh-busy;
+            clicked => {
+                ItemExtras.ssh-passphrase(passphrase.text);
+                passphrase.text = "";
+            }
+        }
+    }
+    if ItemExtras.ssh-error != "": HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        Text {
+            text: ItemExtras.ssh-error;
+            font-size: Theme.small;
+            wrap: word-wrap;
+            color: Theme.danger;
+        }
+    }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        Hint { text: "Generating or importing replaces the key below. You can also paste a private key into its field; the public key and fingerprint follow."; }
+    }
+}

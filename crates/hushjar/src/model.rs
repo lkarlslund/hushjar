@@ -490,17 +490,7 @@ pub fn from_core(item: &core::Item) -> Item {
                 .map(|(i, u)| Field::url(&u.uri).at(P::Uri(Some(i))))
                 .collect();
             sections.push(Section::addable("Websites", sites, AddKind::Website));
-            if item.login.passkeys > 0 {
-                let text = if item.login.passkeys == 1 {
-                    "1 passkey saved".to_string()
-                } else {
-                    format!("{} passkeys saved", item.login.passkeys)
-                };
-                sections.push(Section {
-                    view_only: true,
-                    ..Section::new("Passkeys", vec![Field::info("Passkey", &text)])
-                });
-            }
+            // Passkeys are listed in their own card (app/extras.rs).
         }
         ItemKind::Card => {
             let c = &item.card;

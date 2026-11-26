@@ -155,6 +155,7 @@ pub(super) fn account_summary(a: &AccountState) -> AccountSummary {
 pub(super) fn render(win: &AppWindow, st: &Shared) {
     let shown = st.borrow().shown.clone();
     let editing = st.borrow().editing_shown();
+    render_extras(win, st);
     if shown != Shown::Sends && st.borrow().sends.has_draft() {
         forget_sends(win, st);
     }
@@ -192,9 +193,11 @@ pub(super) fn render(win: &AppWindow, st: &Shared) {
                 return;
             };
             win.set_summary(summary);
+            render_account_fingerprint(win, st, account);
             win.set_mode(PaneMode::Account);
         }
         Shown::Locked(account) => {
+            render_unlock(win, st, account);
             let st = st.borrow();
             let Some(a) = st.accounts.get(account) else {
                 return;
@@ -237,6 +240,7 @@ pub(super) fn render(win: &AppWindow, st: &Shared) {
                 win.set_mode(PaneMode::Empty);
                 return;
             };
+            let locked = stm.reprompt_locked(account, &id);
             let mut models = Vec::new();
             let mut sections = Vec::new();
             let mut shown_sections = Vec::new();
@@ -259,7 +263,7 @@ pub(super) fn render(win: &AppWindow, st: &Shared) {
                 let model = Rc::new(VecModel::from(
                     fields
                         .iter()
-                        .map(|f| to_detail(f, !editing))
+                        .map(|f| shown_detail(f, !editing, locked))
                         .collect::<Vec<_>>(),
                 ));
                 sections.push(DetailSection {
@@ -356,6 +360,11 @@ pub(super) fn render_header(win: &AppWindow, st: &Shared) {
 pub(super) fn refresh_codes(st: &Shared) {
     let st = st.borrow();
     if st.editing_shown() {
+        return;
+    }
+    if let Shown::Item { account, id } = &st.shown
+        && st.reprompt_locked(*account, id)
+    {
         return;
     }
     for (model, section) in st.section_models.iter().zip(&st.shown_sections) {

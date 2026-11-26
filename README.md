@@ -12,20 +12,27 @@ The plan, including a checklist of Bitwarden features, is in
 ## What works
 
 - Several accounts at once, each on its own server (bitwarden.com, bitwarden.eu
-  or self-hosted), with two-step login by authenticator app or email.
-- Unlocking from an encrypted offline copy, then syncing in the background.
+  or self-hosted), with two-step login by authenticator app, email, YubiKey or
+  security key, and the emailed code that confirms a new device.
+- Logging in with another device, and approving other devices' login
+  requests after comparing fingerprint phrases.
+- Unlocking from an encrypted offline copy, with the master password or a
+  PIN, then syncing in the background.
 - A filterable tree grouped by folders, collections or types, and a details
   pane that switches to editing in place.
 - Viewing and editing logins, cards, identities, notes and SSH keys, with
   custom fields, websites, password history, favourites, folders, trash and
-  restore. Data Hushjar does not edit, such as passkeys and attachments, is
-  kept unchanged.
+  restore. Items can be cloned, archived, moved to an organisation or between
+  collections, and set to ask for the master password before showing hidden
+  values; attachments can be opened, saved, added and deleted, passkeys
+  listed and removed, folders renamed and deleted, and SSH keys generated or
+  imported.
 - Verification codes, copying that is hidden from clipboard managers and
   cleared after 30 seconds, and locking after 15 minutes without activity.
 - An SSH agent serving the vault's SSH keys, asking the first time or every
   time a key is used.
 
-Not yet: the generator, Send, attachments, import and export, settings, and
+Not yet: the generator, Send, import and export, settings, and
 organisation management. See the plan for the milestones.
 
 ## Layout
@@ -73,8 +80,9 @@ buttons move into a menu.
   `dist/hushjar-<version>-android-debug.apk`, without Gradle; `--release`
   makes an optimised build, signed with `$ANDROID_KEYSTORE` when set. Install
   it with `adb install -r <apk>`. Not on Android yet: the SSH agent, file
-  dialogs (so import, export and file Sends), the tray and other desktop
-  services. To reach a Vaultwarden on the computer from the emulator, run
+  dialogs (so import, export, file Sends, saving or adding attachments and
+  importing SSH key files), opening attachments or websites in other apps,
+  system authentication, the tray and other desktop services. To reach a Vaultwarden on the computer from the emulator, run
   `adb reverse tcp:18281 tcp:18281` and sign in to `http://127.0.0.1:18281`.
 - `scripts/make-icons.sh` regenerates the committed `.ico`, `.icns` and Android
   launcher icons from `packaging/linux/io.github.lkarlslund.Hushjar.svg`.

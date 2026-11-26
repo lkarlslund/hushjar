@@ -7,10 +7,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use hushjar_core::api::{Server, TwoFactorProvider};
+use hushjar_core::api::{Device, Server, TwoFactorChallenge, TwoFactorProvider};
 use hushjar_core::policy::Policies;
 use hushjar_core::store::{Profile, Store};
 use hushjar_core::vault::{self as core, Vault};
+use hushjar_core::webauthn::Cancel;
 use slint::{
     Color, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak,
 };
@@ -24,22 +25,31 @@ use crate::tree::{self, GroupBy, Row};
 use crate::worker::{Command, Event, Worker};
 mod edit;
 mod events;
+mod extras;
 mod generator;
 mod integration;
 mod live;
+mod login_requests;
 mod sends;
 mod settings;
 mod sign_in;
 mod ssh;
+mod sysunlock;
 mod transfer;
+mod unlock;
 mod view;
 mod wire;
 
 use edit::*;
 use events::*;
+use extras::{
+    Extras, forget_extras, handle_extras_event, private_key_edited, render_extras, shown_detail,
+    waiting_for_reprompt, wire_extras,
+};
 use generator::{Generator, render_generator, show_generator, wire_generator};
 use integration::{Integration, close_requested, sync_prompt_note, update_tray_status};
 use live::*;
+use login_requests::*;
 use sends::{Sends, forget_sends, render_sends, show_sends, wire_sends};
 use settings::*;
 use sign_in::*;
@@ -47,6 +57,7 @@ use ssh::*;
 use transfer::{
     Transfer, forget_transfer, handle_transfer_event, render_transfer, show_transfer, wire_transfer,
 };
+use unlock::*;
 use view::*;
 use wire::*;
 
@@ -116,6 +127,11 @@ struct AccountState {
 #[derive(Clone, Copy, Debug, Default)]
 struct UnlockOptions {
     pin: bool,
+    /// The PIN is kept only until Hushjar quits.
+    pin_in_memory: bool,
+    /// Logged out (by the timeout or the server): there is no offline copy
+    /// for a PIN to open until the master password signs in again.
+    logged_out: bool,
     system_auth: bool,
 }
 
@@ -131,6 +147,22 @@ struct SignIn {
     password: Zeroizing<String>,
     server: Option<Server>,
     worker: Option<Worker>,
+    /// The device a new account signs in as; the same for every retry.
+    device: Device,
+    /// What the server asked for in two-step login.
+    challenge: Option<TwoFactorChallenge>,
+    provider_index: usize,
+    /// Set while the security key waits for a touch; cancels the wait.
+    key_cancel: Option<Cancel>,
+    /// Logging in with a device: the fingerprint phrase to compare.
+    phrase: String,
+    /// Two-step login after another device approved.
+    via_device: bool,
+    /// A device-login poll is on its way to the worker.
+    polling: bool,
+    /// Signing in again for this saved, logged-out account (its ID). Its own
+    /// worker does the work and its events go to this form.
+    existing: Option<String>,
 }
 
 pub struct State {
@@ -159,13 +191,21 @@ pub struct State {
     prompts: VecDeque<Prompt>,
     /// Per SSH key ("account/item"): offered to the agent, and when to ask.
     ssh_settings: HashMap<String, (bool, AskMode)>,
+    /// User keys kept for unlocking with system authentication.
+    key_holder: Arc<crate::desktop::sysauth::KeyHolder>,
+    /// Accounts that unlock with system authentication.
+    system_auth: HashSet<String>,
     prefs: Prefs,
     /// Whether a light or dark theme was forced on the window.
     scheme_forced: bool,
     desktop: Integration,
     generator: Generator,
+    /// Login requests from other devices and account fingerprints.
+    access: Access,
     transfer: Transfer,
     sends: Sends,
+    /// Item and folder actions: re-prompt, attachments, moves, SSH tools.
+    extras: Extras,
 }
 
 type Shared = Rc<RefCell<State>>;
@@ -375,6 +415,10 @@ impl App {
             None => Err("the SSH agent is not available on this system yet".into()),
         };
         let ssh_settings = load_ssh_settings(&store);
+        let system_auth = sysunlock::load_enabled(&store);
+        for a in &mut accounts {
+            a.unlock.system_auth = system_auth.contains(&a.profile.id);
+        }
         let prefs = Prefs::from_settings(&store.read_settings());
         let generator = Generator::from_settings(&store.read_settings());
         let state: Shared = Rc::new(RefCell::new(State {
@@ -400,12 +444,16 @@ impl App {
             agent,
             prompts: VecDeque::new(),
             ssh_settings,
+            key_holder: sysunlock::new_holder(),
+            system_auth,
             prefs,
             scheme_forced: false,
             desktop: Integration::new(),
             generator,
+            access: Access::default(),
             transfer: Transfer::default(),
             sends: Sends::default(),
+            extras: Extras::default(),
         }));
         CONTEXT.with(|c| *c.borrow_mut() = Some((window.as_weak(), state.clone())));
         window.set_rows(ModelRc::from(state.borrow().rows_model.clone()));
@@ -414,6 +462,7 @@ impl App {
         let platform = window.global::<crate::Platform>();
         platform.set_file_dialogs(crate::dialogs::AVAILABLE);
         platform.set_ssh_agent(cfg!(not(target_os = "android")));
+        platform.set_open_files(cfg!(not(target_os = "android")));
 
         let app = Self {
             window,
@@ -421,8 +470,11 @@ impl App {
         };
         wire(&app.window, &state);
         wire_settings(&app.window, &state);
+        sysunlock::wire(&app.window, &state);
         wire_generator(&app.window, &state);
+        wire_access(&app.window, &state);
         wire_transfer(&app.window, &state);
+        wire_extras(&app.window, &state);
         {
             let st = state.clone();
             app.window
@@ -483,7 +535,7 @@ impl App {
             }
         });
         Ok(Self {
-            _timers: vec![ticker],
+            _timers: vec![ticker, access_timer(&app.window, &state)],
             ..app
         })
     }
@@ -586,6 +638,15 @@ fn leave_to(win: &AppWindow, st: &Shared, then: Pending) -> bool {
 fn time_out_all(win: &AppWindow, st: &Shared) {
     let log_out = st.borrow().timeout_action() == LockAction::LogOut;
     if log_out {
+        let ids: Vec<String> = st
+            .borrow()
+            .accounts
+            .iter()
+            .map(|a| a.profile.id.clone())
+            .collect();
+        for id in ids {
+            sysunlock::forget(st, &id);
+        }
         let s = st.borrow();
         for a in &s.accounts {
             if a.vault.is_some() {
@@ -645,5 +706,6 @@ fn handle_event(win: &AppWindow, st: &Shared, id: &str, event: Event) {
         handle_account_event(win, st, id, event);
     }
     update_agent_keys(win, st);
+    render_login_request(win, st);
     update_tray_status(st);
 }
