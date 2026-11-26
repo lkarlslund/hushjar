@@ -3,5 +3,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod api;
 pub mod crypto;
+pub mod session;
+pub mod store;
 pub mod totp;
+pub mod vault;
