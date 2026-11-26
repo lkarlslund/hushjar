@@ -62,7 +62,15 @@ const STEPS: &[Step] = &[
         },
         800,
     ),
-    ("04-edit", |w| w.invoke_begin_edit(), 800),
+    ("03b-item-menu", |w| bump_menu(w, true), 800),
+    (
+        "04-edit",
+        |w| {
+            bump_menu(w, false);
+            w.invoke_begin_edit();
+        },
+        800,
+    ),
     (
         "05-tree",
         |w| {
@@ -140,6 +148,16 @@ const STEPS: &[Step] = &[
         500,
     ),
 ];
+
+/// Opens or closes the item's "more" menu.
+fn bump_menu(w: &AppWindow, open: bool) {
+    let extras = w.global::<crate::ItemExtras>();
+    if open {
+        extras.set_menu_open_request(extras.get_menu_open_request() + 1);
+    } else {
+        extras.set_menu_close_request(extras.get_menu_close_request() + 1);
+    }
+}
 
 pub fn run(window: &AppWindow, dir: PathBuf) -> Rc<Timer> {
     std::fs::create_dir_all(&dir).expect("create snapshot directory");

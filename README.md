@@ -22,14 +22,17 @@ The plan, including a checklist of Bitwarden features, is in
   pane that switches to editing in place.
 - Viewing and editing logins, cards, identities, notes and SSH keys, with
   custom fields, websites, password history, favourites, folders, trash and
-  restore. Data Hushjar does not edit, such as passkeys and attachments, is
-  kept unchanged.
+  restore. Items can be cloned, archived, moved to an organisation or between
+  collections, and set to ask for the master password before showing hidden
+  values; attachments can be opened, saved, added and deleted, passkeys
+  listed and removed, folders renamed and deleted, and SSH keys generated or
+  imported.
 - Verification codes, copying that is hidden from clipboard managers and
   cleared after 30 seconds, and locking after 15 minutes without activity.
 - An SSH agent serving the vault's SSH keys, asking the first time or every
   time a key is used.
 
-Not yet: the generator, Send, attachments, import and export, settings, and
+Not yet: the generator, Send, import and export, settings, and
 organisation management. See the plan for the milestones.
 
 ## Layout

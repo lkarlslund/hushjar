@@ -187,6 +187,7 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
         }
         Event::UserKey(key) => sysunlock::key_arrived(st, index, key),
         Event::Removed => {
+            forget_extras(st, index);
             sysunlock::forget(st, id);
             {
                 let mut state = st.borrow_mut();
@@ -224,6 +225,14 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
         | Event::DeviceLoginStarted { .. }
         | Event::DeviceLoginWaiting
         | Event::DeviceLoginEnded { .. } => {}
+        event @ (Event::PasswordVerified | Event::PasswordRejected)
+            if waiting_for_reprompt(st, index) =>
+        {
+            handle_extras_event(win, st, index, event)
+        }
+        event @ (Event::ItemActionDone { .. }
+        | Event::ItemActionFailed { .. }
+        | Event::AttachmentWritten { .. }) => handle_extras_event(win, st, index, event),
         event @ (Event::PasswordVerified
         | Event::PasswordRejected
         | Event::Exported { .. }
@@ -236,6 +245,7 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
 
 /// An account is locked, by the user, a timeout or the server.
 fn locked(win: &AppWindow, st: &Shared, index: usize) {
+    forget_extras(st, index);
     {
         let mut state = st.borrow_mut();
         let a = &mut state.accounts[index];

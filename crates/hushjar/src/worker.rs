@@ -32,6 +32,8 @@ use crate::pacing::{Debounce, WATCH_EVERY, Watch};
 /// fresh access token (the worker may be in the middle of a long sync).
 const TOKEN_WAIT: Duration = Duration::from_secs(30);
 
+mod items;
+
 pub enum Command {
     SignIn(Box<SignInRequest>),
     SendEmailCode {
@@ -137,6 +139,49 @@ pub enum Command {
     Token(Sender<Option<Zeroizing<String>>>),
     /// From the notification listener: something the server announced.
     Remote(Notification),
+    // Item and folder actions; see `items`.
+    Archive(String),
+    Unarchive(String),
+    RemovePasskey {
+        item: String,
+        credential: String,
+    },
+    MoveToOrganization {
+        item: String,
+        organization: String,
+        collections: Vec<String>,
+    },
+    SetCollections {
+        item: String,
+        collections: Vec<String>,
+    },
+    RenameFolder {
+        id: String,
+        name: String,
+    },
+    /// Renames a folder and the folders nested in it.
+    RenameFolderTree {
+        old: String,
+        new: String,
+    },
+    DeleteFolder(String),
+    /// Downloads an attachment and writes it, readable by its owner only,
+    /// to `path`; `open` is passed back so the UI can open it.
+    DownloadAttachment {
+        item: String,
+        attachment: String,
+        path: PathBuf,
+        open: bool,
+    },
+    /// Reads the file at `path` and attaches it to the item.
+    AddAttachment {
+        item: String,
+        path: PathBuf,
+    },
+    DeleteAttachment {
+        item: String,
+        attachment: String,
+    },
 }
 
 /// What happened, for the UI. `vault` copies are the decrypted state after
@@ -261,6 +306,20 @@ pub enum Event {
     /// Whether live updates are failing repeatedly, and why.
     LiveStatus {
         problem: Option<String>,
+    },
+    /// An item or folder action finished; the message is for a toast.
+    ItemActionDone {
+        vault: Vault,
+        message: String,
+    },
+    /// An item or folder action failed. An empty message has already been
+    /// explained (for example by [`Event::NeedsSignIn`]).
+    ItemActionFailed {
+        message: String,
+    },
+    AttachmentWritten {
+        path: PathBuf,
+        open: bool,
     },
 }
 
@@ -643,6 +702,19 @@ fn run(
                 change(&mut session, &store, &emit, "Send deleted", |s, st| {
                     s.delete_send(st, &id)
                 })
+            }
+            command @ (Command::Archive(_)
+            | Command::Unarchive(_)
+            | Command::RemovePasskey { .. }
+            | Command::MoveToOrganization { .. }
+            | Command::SetCollections { .. }
+            | Command::RenameFolder { .. }
+            | Command::RenameFolderTree { .. }
+            | Command::DeleteFolder(_)
+            | Command::DownloadAttachment { .. }
+            | Command::AddAttachment { .. }
+            | Command::DeleteAttachment { .. }) => {
+                items::run(session.as_mut(), &store, &emit, command)
             }
             Command::Remove => {
                 live.stop();

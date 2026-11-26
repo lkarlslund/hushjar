@@ -30,7 +30,8 @@ resvg = { version = "0.49", default-features = false }
 zbus = "5"
 
 [dev-dependencies]
-# For the worker's test against a Vaultwarden test server.
+# For the worker's tests against a Vaultwarden test server (including
+# src/worker/items.rs).
 ureq = { version = "3.5.2", features = ["json"] }
 uuid = { version = "1.29.3", features = ["v4"] }
 

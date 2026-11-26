@@ -16,6 +16,11 @@ pub(super) fn begin_edit(win: &AppWindow, st: &Shared) {
         };
         let online =
             state.accounts[account].vault.is_some() && !state.accounts[account].needs_sign_in;
+        if state.reprompt_locked(account, &id) {
+            drop(state);
+            toast(win, st, "Enter your master password first");
+            return;
+        }
         if item.deleted || !item.editable || !online {
             drop(state);
             if !online {

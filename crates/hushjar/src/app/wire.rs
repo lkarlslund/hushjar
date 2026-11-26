@@ -137,6 +137,10 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
             "password" => (FieldPath::Password, "password"),
             _ => (FieldPath::Totp, "verification code"),
         };
+        if st.borrow().copy_blocked(path) {
+            toast(&win, st, "Enter your master password first");
+            return;
+        }
         let found = {
             let st = st.borrow();
             match &st.shown {
@@ -193,6 +197,7 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
         edit_shown_field(&win, st, section as usize, field as usize, |f| {
             f.value = text.to_string()
         });
+        private_key_edited(&win, st, section as usize, field as usize);
     });
     on!(on_edit_label, |win,
                         st,

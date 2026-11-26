@@ -1,4 +1,4 @@
-import { ScrollView, LineEdit, TextEdit, ComboBox } from "std-widgets.slint";
+import { ScrollView, LineEdit, TextEdit } from "std-widgets.slint";
 import { SignInPane, AccountPane } from "panes.slint";
 import { UnlockData, PinUnlockForm } from "access.slint";
 import { SettingsPane } from "settings.slint";
@@ -6,7 +6,10 @@ import { GeneratorPane } from "generator.slint";
 import { TransferPane } from "transfer.slint";
 import { SendsPane } from "sends.slint";
 import { Theme, Icons } from "theme.slint";
-import { Icon, IconButton, ActionButton, Avatar, TypeTile, Segmented, Toggle } from "widgets.slint";
+import { Icon, IconButton, ActionButton, Avatar, TypeTile, Segmented, Toggle, Picker } from "widgets.slint";
+import {
+    ItemExtras, ItemMenu, RepromptBanner, RepromptRow, AttachmentsCard, PasskeysCard, MoveCard, FolderActions, SshKeyTools,
+} from "item-extras.slint";
 import {
     AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode, RowIcon,
     SignInForm,
@@ -350,6 +353,7 @@ export component DetailsPane inherits Rectangle {
             font-size: Theme.body;
             color: Theme.muted;
         }
+        if ItemExtras.folder-actions: FolderActions {}
     }
 
     // Unlock form for a locked account
@@ -549,9 +553,14 @@ export component DetailsPane inherits Rectangle {
                                     size: 30px;
                                     clicked => { root.delete-item(); }
                                 }
+                                if !root.editing && ItemExtras.menu.length > 0: ItemMenu {}
                             }
                         }
                     }
+
+                    if !root.editing && ItemExtras.reprompt-locked: RepromptBanner {}
+
+                    if !root.editing && ItemExtras.move-mode != 0: MoveCard {}
 
                     if root.editing && root.header.is-new: Segmented {
                         options: root.item-types;
@@ -568,11 +577,11 @@ export component DetailsPane inherits Rectangle {
                             font-size: Theme.small;
                             color: Theme.muted;
                         }
-                        if !folder-row.adding: ComboBox {
+                        if !folder-row.adding: Picker {
                             horizontal-stretch: 1;
-                            model: root.folders;
-                            current-index: root.folder-index;
-                            selected => { root.pick-folder(self.current-index); }
+                            options: root.folders;
+                            current: root.folder-index;
+                            picked(index) => { root.pick-folder(index); }
                         }
                         if !folder-row.adding: ActionButton {
                             text: "New folder";
@@ -594,6 +603,10 @@ export component DetailsPane inherits Rectangle {
                             clicked => { folder-row.adding = false; }
                         }
                     }
+
+                    if root.editing: RepromptRow {}
+
+                    if root.editing && ItemExtras.ssh-tools: SshKeyTools {}
 
                     if root.ssh-visible && !root.editing: SectionCard {
                         title: "SSH agent";
@@ -664,6 +677,12 @@ export component DetailsPane inherits Rectangle {
                                 clicked => { root.add-field(si); }
                             }
                         }
+                    }
+
+                    if !root.editing && ItemExtras.passkeys.length > 0: PasskeysCard {}
+
+                    if ItemExtras.attachments-visible: AttachmentsCard {
+                        editing: root.editing;
                     }
 
                     if !root.editing: Text {
