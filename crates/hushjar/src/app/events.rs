@@ -182,6 +182,13 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
             }
         }
         Event::SignedIn { .. } | Event::TwoFactorRequired { .. } | Event::EmailSent => {}
+        event @ (Event::PasswordVerified
+        | Event::PasswordRejected
+        | Event::Exported { .. }
+        | Event::ImportParsed { .. }
+        | Event::ImportPasswordNeeded { .. }
+        | Event::Imported { .. }
+        | Event::TransferFailed { .. }) => handle_transfer_event(win, st, index, event),
     }
 }
 

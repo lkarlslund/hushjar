@@ -5,11 +5,18 @@
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use std::path::PathBuf;
+
 use hushjar_core::api::{SecondFactor, Server, TwoFactorProvider};
+use hushjar_core::exchange::ExchangeError;
+use hushjar_core::exchange::export::Scope;
+use hushjar_core::exchange::import::{Format, ImportSummary, ParsedImport};
 use hushjar_core::session::{Session, SessionError};
 use hushjar_core::store::{Profile, Store};
 use hushjar_core::vault::{Item, Vault};
 use zeroize::Zeroizing;
+
+use crate::exchange::{ExportFormat, ExportScope};
 
 pub enum Command {
     SignIn {
@@ -40,6 +47,27 @@ pub enum Command {
     /// Locks and forgets the session and offline copy.
     LogOut,
     Remove,
+    /// Checks the master password, for actions that ask for it again.
+    VerifyPassword {
+        password: Zeroizing<String>,
+    },
+    /// Writes an export file to `path`.
+    Export {
+        scope: ExportScope,
+        format: ExportFormat,
+        /// The file password of a password-protected export.
+        password: Option<Zeroizing<String>>,
+        path: PathBuf,
+    },
+    ParseImport {
+        bytes: Zeroizing<Vec<u8>>,
+        format: Option<Format>,
+        /// The password of a protected import file.
+        password: Option<Zeroizing<String>>,
+    },
+    Import {
+        parsed: Box<ParsedImport>,
+    },
 }
 
 /// What happened, for the UI. `vault` copies are the decrypted state after
@@ -83,6 +111,28 @@ pub enum Event {
     },
     Locked,
     Removed,
+    /// The master password was right.
+    PasswordVerified,
+    /// The master password was wrong.
+    PasswordRejected,
+    Exported {
+        path: PathBuf,
+    },
+    ImportParsed {
+        parsed: Box<ParsedImport>,
+    },
+    /// The import file needs its password (`wrong`: the one given failed).
+    ImportPasswordNeeded {
+        wrong: bool,
+    },
+    Imported {
+        summary: ImportSummary,
+        vault: Vault,
+    },
+    /// An export or import step failed; the message is for the transfer pane.
+    TransferFailed {
+        message: String,
+    },
 }
 
 pub struct Worker {
@@ -327,6 +377,25 @@ fn run(
                 }
                 emit(Event::Locked);
             }
+            Command::VerifyPassword { password } => emit(verify_password(&profile, &password)),
+            Command::Export {
+                scope,
+                format,
+                password,
+                path,
+            } => emit(export_file(
+                session.as_ref(),
+                &scope,
+                format,
+                password,
+                &path,
+            )),
+            Command::ParseImport {
+                bytes,
+                format,
+                password,
+            } => emit(parse_import(session.as_ref(), &bytes, format, password)),
+            Command::Import { parsed } => import_items(&mut session, &store, &emit, &parsed),
             Command::Remove => {
                 drop(session.take());
                 if let Some(p) = &profile {
@@ -356,5 +425,127 @@ fn change(
         Err(e) => emit(Event::Failed {
             message: describe(&e),
         }),
+    }
+}
+
+fn failed(message: impl Into<String>) -> Event {
+    Event::TransferFailed {
+        message: message.into(),
+    }
+}
+
+/// Derives the key from the master password and tries to open the account's
+/// user key with it, as unlocking does.
+fn verify_password(profile: &Option<Profile>, password: &str) -> Event {
+    let Some(p) = profile else {
+        return Event::PasswordRejected;
+    };
+    let opened = hushjar_core::crypto::master_key(password, &p.email, p.kdf)
+        .ok()
+        .and_then(|master| {
+            hushjar_core::crypto::stretch(&master)
+                .unwrap_key(&p.encrypted_user_key)
+                .ok()
+        });
+    if opened.is_some() {
+        Event::PasswordVerified
+    } else {
+        Event::PasswordRejected
+    }
+}
+
+fn export_text(
+    session: &Session,
+    scope: &ExportScope,
+    format: ExportFormat,
+    password: Option<&str>,
+) -> Result<Zeroizing<String>, ExchangeError> {
+    let scope = match scope {
+        ExportScope::Personal => Scope::Personal,
+        ExportScope::Organization(id) => Scope::Organization(id),
+    };
+    match format {
+        ExportFormat::Json => session.export_json(scope),
+        ExportFormat::EncryptedJson => session.export_encrypted_json(scope),
+        ExportFormat::PasswordProtectedJson => {
+            session.export_password_protected_json(scope, password.unwrap_or_default())
+        }
+        ExportFormat::Csv => session.export_csv(scope),
+    }
+}
+
+fn export_file(
+    session: Option<&Session>,
+    scope: &ExportScope,
+    format: ExportFormat,
+    password: Option<Zeroizing<String>>,
+    path: &std::path::Path,
+) -> Event {
+    let Some(session) = session else {
+        return failed("Unlock the account first");
+    };
+    let text = match export_text(
+        session,
+        scope,
+        format,
+        password.as_deref().map(String::as_str),
+    ) {
+        Ok(text) => text,
+        Err(e) => return failed(e.to_string()),
+    };
+    match crate::exchange::write_private(path, text.as_bytes()) {
+        Ok(()) => Event::Exported {
+            path: path.to_path_buf(),
+        },
+        Err(e) => failed(format!("Could not write the file: {e}")),
+    }
+}
+
+fn parse_import(
+    session: Option<&Session>,
+    bytes: &[u8],
+    format: Option<Format>,
+    password: Option<Zeroizing<String>>,
+) -> Event {
+    let Some(session) = session else {
+        return failed("Unlock the account first");
+    };
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return failed("This is not a text file, so it cannot be imported");
+    };
+    let text = text.trim_start_matches('\u{feff}');
+    let given = password.is_some();
+    match session.parse_import(text, format, password.as_deref().map(String::as_str)) {
+        Ok(parsed) => Event::ImportParsed {
+            parsed: Box::new(parsed),
+        },
+        Err(ExchangeError::PasswordRequired) => Event::ImportPasswordNeeded { wrong: false },
+        Err(ExchangeError::WrongPassword) if given => Event::ImportPasswordNeeded { wrong: true },
+        Err(e) => failed(e.to_string()),
+    }
+}
+
+fn import_items(
+    session: &mut Option<Session>,
+    store: &Store,
+    emit: &dyn Fn(Event),
+    parsed: &ParsedImport,
+) {
+    let Some(s) = session.as_mut() else { return };
+    match s.import(store, parsed) {
+        Ok(summary) => emit(Event::Imported {
+            summary,
+            vault: s.vault.clone(),
+        }),
+        Err(SessionError::SaveUncertain) => {
+            let _ = s.sync(store);
+            emit(Event::Synced {
+                vault: s.vault.clone(),
+                synced_at: s.synced_at,
+            });
+            emit(failed(describe(&SessionError::SaveUncertain)));
+        }
+        Err(SessionError::SignInRequired) => emit(Event::NeedsSignIn { two_factor: vec![] }),
+        Err(e) => emit(failed(describe(&e))),
     }
 }

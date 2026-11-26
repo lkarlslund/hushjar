@@ -5,6 +5,7 @@ import { VaultTree } from "tree.slint";
 import { DetailsPane } from "details.slint";
 import { SettingsData, AccountSecurity } from "settings.slint";
 import { GeneratorData, GeneratedValue } from "generator.slint";
+import { TransferData } from "transfer.slint";
 import {
     AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode,
     RowIcon, RowKind, SignInForm, TreeRow,
@@ -12,7 +13,7 @@ import {
 
 export {
     AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode,
-    RowIcon, RowKind, SignInForm, TreeRow, Palette, SettingsData, AccountSecurity, GeneratorData, GeneratedValue,
+    RowIcon, RowKind, SignInForm, TreeRow, Palette, SettingsData, AccountSecurity, GeneratorData, GeneratedValue, TransferData,
 }
 
 component TopBar inherits Rectangle {
@@ -23,6 +24,7 @@ component TopBar inherits Rectangle {
     callback new-item();
     callback generator();
     callback send();
+    callback transfer();
     callback settings();
     callback lock-all();
     callback agent-clicked();
@@ -103,6 +105,10 @@ component TopBar inherits Rectangle {
         VerticalLayout {
             alignment: center;
             IconButton { icon: Icons.send; label: "Send"; clicked => { root.send(); } }
+        }
+        VerticalLayout {
+            alignment: center;
+            IconButton { icon: Icons.transfer; label: "Import and export"; clicked => { root.transfer(); } }
         }
         VerticalLayout {
             alignment: center;
@@ -219,6 +225,7 @@ export component AppWindow inherits Window {
     callback open-settings();
     callback open-generator();
     callback open-sends();
+    callback open-transfer();
     callback lock-all();
 
     public function focus-tree() {
@@ -252,6 +259,7 @@ export component AppWindow inherits Window {
                 new-item => { root.new-item(); }
                 generator => { root.open-generator(); }
                 send => { root.open-sends(); }
+                transfer => { root.open-transfer(); }
                 settings => { root.open-settings(); }
                 lock-all => { root.lock-all(); }
                 agent-running: root.agent-running;
