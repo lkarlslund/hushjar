@@ -233,7 +233,13 @@ pub(super) fn handle_sign_in_event(win: &AppWindow, st: &Shared, event: Event) {
                 si.busy = false;
                 let supported: Vec<_> = providers
                     .into_iter()
-                    .filter(|p| p.supported() && *p != TwoFactorProvider::YubiKey)
+                    .filter(|p| {
+                        p.supported()
+                            && !matches!(
+                                p,
+                                TwoFactorProvider::YubiKey | TwoFactorProvider::WebAuthn
+                            )
+                    })
                     .collect();
                 if si.stage == 1 {
                     si.error = "That code was not accepted".into();

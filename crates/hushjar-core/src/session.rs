@@ -9,22 +9,40 @@ use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 use crate::api::{
-    ApiError, Client, Device, FileUpload, MAX_FILE_BYTES, SecondFactor, Server, TwoFactorProvider,
-    field, field_str,
+    ApiError, Client, Device, FileUpload, Login, MAX_FILE_BYTES, PasswordGrant, SecondFactor,
+    Server, TwoFactorChallenge, TwoFactorProvider, field, field_str,
 };
-use crate::crypto::{self, CryptoError, HashPurpose, PrivateKey, SymmetricKey};
+use crate::crypto::{self, CryptoError, HashPurpose, Kdf, PrivateKey, SymmetricKey};
 use crate::exchange::import::{self, ImportSummary, ParsedImport};
 use crate::policy::Policies;
 use crate::send::{self, SendEntry, SendFile, SendKind};
 use crate::store::{Profile, Store};
 use crate::vault::{self, Item, Keys, Vault, VaultError};
 
+mod device_login;
+mod pin;
+
+pub use device_login::{DeviceLogin, DeviceLoginStatus, request_public_key};
+pub use pin::{MAX_PIN_ATTEMPTS, PinUnlock};
+
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("wrong master password")]
     WrongPassword,
     #[error("two-step login is required")]
-    TwoFactorRequired(Vec<TwoFactorProvider>),
+    TwoFactorRequired(TwoFactorChallenge),
+    /// Sign in again with the emailed code in [`SignInOptions`], using the
+    /// same device.
+    #[error("enter the code sent to your email to confirm this new device")]
+    NewDeviceVerificationRequired,
+    #[error("wrong PIN; {attempts_left} attempts left")]
+    WrongPin { attempts_left: u32 },
+    #[error("PIN unlock is not available; unlock with the master password")]
+    PinUnavailable,
+    #[error("the saved key no longer opens this account; unlock with the master password")]
+    KeyRejected,
+    #[error("the login request has not been approved")]
+    NotApproved,
     #[error("sign in again to reconnect this account")]
     SignInRequired,
     #[error("{0}")]
@@ -51,6 +69,7 @@ impl From<ApiError> for SessionError {
     fn from(error: ApiError) -> Self {
         match error {
             ApiError::TwoFactorRequired(p) => SessionError::TwoFactorRequired(p),
+            ApiError::NewDeviceVerificationRequired => SessionError::NewDeviceVerificationRequired,
             ApiError::Unauthorized => SessionError::SignInRequired,
             other => SessionError::Api(other),
         }
@@ -66,6 +85,26 @@ const TINTS: [[u8; 3]; 6] = [
     [0x13, 0x86, 0x93],
     [0x8a, 0x5c, 0xd6],
 ];
+
+/// Extra proof and settings for a password sign-in.
+#[derive(Default)]
+pub struct SignInOptions<'a> {
+    pub second: Option<SecondFactor<'a>>,
+    /// The code Bitwarden emailed after [`SessionError::NewDeviceVerificationRequired`].
+    pub new_device_code: Option<&'a str>,
+    /// The device to sign in as when adding a new account. Keep the same one
+    /// across retries: new-device codes and remembered two-step logins are
+    /// tied to it. Ignored when reconnecting a saved account, which keeps its
+    /// own device.
+    pub device: Option<&'a Device>,
+}
+
+/// Who is signing in: what a new profile records besides the server.
+struct Signer {
+    email: String,
+    kdf: Kdf,
+    device: Device,
+}
 
 struct Online {
     access: Zeroizing<String>,
@@ -118,6 +157,23 @@ impl Session {
         Ok(())
     }
 
+    /// Asks Bitwarden to email another code for confirming a new device.
+    /// Use the same device as the sign-in that asked for it.
+    pub fn resend_new_device_code(
+        server: &Server,
+        email: &str,
+        password: &str,
+        device: &Device,
+    ) -> Result<(), SessionError> {
+        let email = crypto::normalize_email(email);
+        let client = Client::new(server.clone());
+        let kdf = client.prelogin(&email)?;
+        let master = crypto::master_key(password, &email, kdf)?;
+        let hash = crypto::password_hash(&master, password, HashPurpose::Server);
+        client.resend_new_device_code(&email, &hash, device)?;
+        Ok(())
+    }
+
     /// Signs in online. With `existing`, reconnects that saved account and
     /// keeps its local identity; otherwise creates a new profile.
     pub fn sign_in(
@@ -128,16 +184,60 @@ impl Session {
         second: Option<SecondFactor<'_>>,
         existing: Option<&Profile>,
     ) -> Result<Session, SessionError> {
+        let options = SignInOptions {
+            second,
+            ..SignInOptions::default()
+        };
+        Self::sign_in_with(store, server, email, password, options, existing)
+    }
+
+    /// Signs in online with a new-device code or a chosen device, as
+    /// [`Session::sign_in`] otherwise.
+    pub fn sign_in_with(
+        store: &Store,
+        server: Server,
+        email: &str,
+        password: &str,
+        options: SignInOptions<'_>,
+        existing: Option<&Profile>,
+    ) -> Result<Session, SessionError> {
         let email = crypto::normalize_email(email);
-        let client = Client::new(server.clone());
+        let client = Client::new(server);
         let kdf = client.prelogin(&email)?;
         let master = crypto::master_key(password, &email, kdf)?;
         let hash = crypto::password_hash(&master, password, HashPurpose::Server);
-        let device = existing.map(|p| p.device.clone()).unwrap_or_default();
-        let login = client.login(&email, &hash, &device, second)?;
+        let device = existing
+            .map(|p| p.device.clone())
+            .or_else(|| options.device.cloned())
+            .unwrap_or_default();
+        let login = client.password_grant(&PasswordGrant {
+            email: &email,
+            secret: &hash,
+            device: &device,
+            second: options.second,
+            new_device_code: options.new_device_code,
+            auth_request: None,
+        })?;
         let user = crypto::stretch(&master)
             .unwrap_key(&login.key)
             .map_err(|_| SessionError::WrongPassword)?;
+        let who = Signer { email, kdf, device };
+        Self::start_online(store, client, who, login, user, existing)
+    }
+
+    /// Finishes an online sign-in once the user key is known: syncs, then
+    /// saves the profile and the offline copy. Shared by every way of
+    /// signing in.
+    fn start_online(
+        store: &Store,
+        client: Client,
+        who: Signer,
+        login: Login,
+        user: SymmetricKey,
+        existing: Option<&Profile>,
+    ) -> Result<Session, SessionError> {
+        let Signer { email, kdf, device } = who;
+        let server = client.server.clone();
         let private = login
             .private_key
             .as_deref()
@@ -204,6 +304,57 @@ impl Session {
         let user = crypto::stretch(&master)
             .unwrap_key(&profile.encrypted_user_key)
             .map_err(|_| SessionError::WrongPassword)?;
+        Self::open_offline(store, profile, user)
+    }
+
+    /// Unlocks with a user key kept by the operating system, such as behind
+    /// a biometric prompt (see [`Session::export_user_key`]). The key is
+    /// checked first: it must open the account's private key, when there is
+    /// one, and the authenticated offline copy.
+    pub fn unlock_with_user_key(
+        store: &Store,
+        profile: &Profile,
+        key: &[u8],
+    ) -> Result<Session, SessionError> {
+        let user = SymmetricKey::from_bytes(key).map_err(|_| SessionError::KeyRejected)?;
+        if let Some(wrapped) = &profile.encrypted_private_key {
+            PrivateKey::unwrap(&user, wrapped).map_err(|_| SessionError::KeyRejected)?;
+        }
+        match Self::open_offline(store, profile, user) {
+            Err(SessionError::Crypto(CryptoError::Authentication)) => {
+                Err(SessionError::KeyRejected)
+            }
+            other => other,
+        }
+    }
+
+    /// The decrypted user key, for the app to keep behind an operating
+    /// system prompt for biometric unlock. Never write it to disk unwrapped.
+    pub fn export_user_key(&self) -> Zeroizing<Vec<u8>> {
+        self.keys.user.to_bytes()
+    }
+
+    /// The account's ID on the server: the material for the account
+    /// fingerprint phrase, together with [`Session::account_public_key`].
+    pub fn user_id(&self) -> &str {
+        &self.profile.user_id
+    }
+
+    /// The account's RSA public key as SubjectPublicKeyInfo DER, if the
+    /// account has a key pair.
+    pub fn account_public_key(&self) -> Option<Vec<u8>> {
+        let wrapped = self.profile.encrypted_private_key.as_deref()?;
+        let private = PrivateKey::unwrap(&self.keys.user, wrapped).ok()?;
+        Some(private.public_key().to_der())
+    }
+
+    /// Opens the offline copy with the user key. Every way of unlocking ends
+    /// here, so they all leave the session in the same state.
+    fn open_offline(
+        store: &Store,
+        profile: &Profile,
+        user: SymmetricKey,
+    ) -> Result<Session, SessionError> {
         let sealed = store
             .read_cache(&profile.id)
             .map_err(|_| SessionError::NoOfflineCopy)?;

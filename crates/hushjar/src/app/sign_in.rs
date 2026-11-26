@@ -77,6 +77,7 @@ pub(super) fn render_sign_in(win: &AppWindow, st: &Shared) {
                 TwoFactorProvider::Authenticator => "Authenticator app",
                 TwoFactorProvider::Email => "Email",
                 TwoFactorProvider::YubiKey => "YubiKey",
+                TwoFactorProvider::WebAuthn => "Security key",
                 TwoFactorProvider::Other(_) => "Other",
             })
         })

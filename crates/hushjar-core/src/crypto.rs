@@ -483,20 +483,72 @@ impl PrivateKey {
             .map_err(|_| CryptoError::Rsa)
     }
 
+    /// Makes a fresh RSA-2048 key, as used for one login-with-device request.
+    pub fn generate() -> Result<Self, CryptoError> {
+        rsa::PrivateKey::new(&mut getrandom::SysRng, 2048)
+            .map(Self)
+            .map_err(|_| CryptoError::Rsa)
+    }
+
+    /// The matching public key.
+    pub fn public_key(&self) -> PublicKey {
+        PublicKey(self.0.to_public_key())
+    }
+
     /// Opens an organisation key shared with this account (type 4).
     pub fn unwrap_key(&self, wrapped: &str) -> Result<SymmetricKey, CryptoError> {
+        SymmetricKey::from_bytes(&self.decrypt(wrapped)?)
+    }
+
+    /// Decrypts a type 4 (RSA-2048-OAEP-SHA1) encrypted string to raw bytes.
+    pub fn decrypt(&self, wrapped: &str) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
         match wrapped.parse()? {
-            EncString::Rsa { kind: 4, ct } => {
-                let plain = Zeroizing::new(
-                    self.0
-                        .oaep_decrypt::<sha1::Sha1>(&ct)
-                        .map_err(|_| CryptoError::Rsa)?,
-                );
-                SymmetricKey::from_bytes(&plain)
-            }
+            EncString::Rsa { kind: 4, ct } => Ok(Zeroizing::new(
+                self.0
+                    .oaep_decrypt::<sha1::Sha1>(&ct)
+                    .map_err(|_| CryptoError::Rsa)?,
+            )),
             EncString::Rsa { kind, .. } => Err(CryptoError::UnsupportedType(kind)),
             EncString::AesCbcHmac { .. } => Err(CryptoError::UnsupportedType(2)),
         }
+    }
+}
+
+/// An RSA public key, such as the one a device sends with a login request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicKey(rsa::PublicKey);
+
+impl PublicKey {
+    /// Reads a SubjectPublicKeyInfo DER key, the form Bitwarden sends.
+    pub fn from_der(der: &[u8]) -> Result<Self, CryptoError> {
+        use rsa::pkcs8::DecodePublicKey;
+        rsa::PublicKey::from_public_key_der(der)
+            .map(Self)
+            .map_err(|_| CryptoError::Rsa)
+    }
+
+    /// The key as SubjectPublicKeyInfo DER, which fingerprint phrases hash.
+    pub fn to_der(&self) -> Vec<u8> {
+        use rsa::pkcs8::EncodePublicKey;
+        self.0
+            .to_public_key_der()
+            .map(|d| d.as_bytes().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Encrypts bytes as a type 4 encrypted string that only the holder of
+    /// the private key can open.
+    pub fn encrypt(&self, plaintext: &[u8]) -> Result<String, CryptoError> {
+        let ct = self
+            .0
+            .oaep_encrypt::<sha1::Sha1>(plaintext)
+            .map_err(|_| CryptoError::Rsa)?;
+        Ok(EncString::Rsa { kind: 4, ct }.to_string())
+    }
+
+    /// Shares a symmetric key, such as the user key, with this key's holder.
+    pub fn wrap_key(&self, key: &SymmetricKey) -> Result<String, CryptoError> {
+        self.encrypt(&key.to_bytes())
     }
 }
 
