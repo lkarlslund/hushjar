@@ -54,7 +54,7 @@ export struct DetailSection {
     add-label: string,
 }
 
-export enum PaneMode { empty, item, group, locked }
+export enum PaneMode { empty, item, group, locked, sign-in, account }
 
 export struct ItemHeader {
     name: string,
@@ -63,6 +63,7 @@ export struct ItemHeader {
     favorite: bool,
     deleted: bool,
     is-new: bool,
+    editable: bool,
 }
 
 export struct AccountBadge {
@@ -76,5 +77,32 @@ export struct GroupSummary {
     title: string,
     icon: RowIcon,
     path: string,
+    count: int,
+}
+
+// The add-account form. Stage 0 asks for the server, email and password;
+// stage 1 asks for a two-step login code.
+export struct SignInForm {
+    stage: int,
+    server-choice: int,
+    url: string,
+    email: string,
+    error: string,
+    busy: bool,
+    providers: [string],
+    provider-index: int,
+    email-provider: bool,
+    reconnect: bool,
+}
+
+export struct AccountSummary {
+    email: string,
+    server: string,
+    tint: color,
+    initials: string,
+    status: string,
+    needs-sign-in: bool,
+    two-factor: bool,
+    busy: bool,
     count: int,
 }

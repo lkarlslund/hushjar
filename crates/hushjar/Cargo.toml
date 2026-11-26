@@ -7,10 +7,12 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 getrandom = "0.4"
 hushjar-core.workspace = true
 png = { version = "0.18", optional = true }
 slint.workspace = true
+zeroize = "1.9.2"
 
 [build-dependencies]
 slint-build.workspace = true

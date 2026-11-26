@@ -340,3 +340,142 @@ mod end_to_end {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+/// Creates an invented demo account with sample items and signs it in to the
+/// data folder in HUSHJAR_SEED_DIR, for trying the app and taking screenshots.
+#[test]
+#[ignore = "creates a demo account; run on request"]
+fn seed_demo_account() {
+    use hushjar_core::session::Session;
+    use hushjar_core::store::Store;
+    use hushjar_core::vault::{CustomField, FieldType, Item, ItemKind, Uri};
+    let (Some(base), Some(dir)) = (server(), std::env::var_os("HUSHJAR_SEED_DIR")) else {
+        eprintln!("skipped: set HUSHJAR_INTEROP and HUSHJAR_SEED_DIR");
+        return;
+    };
+    let password = "hushjar demo password";
+    let email = unique_email("demo");
+    register(
+        &base,
+        &email,
+        password,
+        Kdf::Pbkdf2 {
+            iterations: 600_000,
+        },
+    );
+    let store = Store::open(dir.into()).unwrap();
+    let mut session = Session::sign_in(
+        &store,
+        Server::parse(&base).unwrap(),
+        &email,
+        password,
+        None,
+        None,
+    )
+    .unwrap();
+    let mut folder = |name: &str| session.create_folder(&store, name).unwrap();
+    let work = folder("Work");
+    let code = folder("Work/Code");
+    let home = folder("Home");
+    let money = folder("Finance");
+    let login = |name: &str, folder: &str, user: &str, pass: &str, totp: &str, site: &str| {
+        let mut item = Item::new(ItemKind::Login, None, Some(folder.to_string()));
+        item.name = name.into();
+        item.login.username = user.into();
+        item.login.password = pass.into();
+        item.login.totp = totp.into();
+        item.login.uris = vec![Uri {
+            uri: site.into(),
+            match_type: None,
+        }];
+        item
+    };
+    let mut github = login(
+        "GitHub",
+        &code,
+        "sam-dev",
+        "correct-horse-battery-staple-42",
+        "JBSWY3DPEHPK3PXP",
+        "https://github.com",
+    );
+    github.favorite = true;
+    github.notes = "Recovery codes are printed and kept in the fireproof box.".into();
+    github.fields = vec![CustomField {
+        name: "Recovery email".into(),
+        value: "sam+github@example.org".into(),
+        kind: FieldType::Text,
+        linked_id: None,
+    }];
+    let mut items = vec![
+        github,
+        login(
+            "GitLab",
+            &code,
+            "sam",
+            "w1nter-Is-c0ming!",
+            "",
+            "https://gitlab.com",
+        ),
+        login(
+            "Jira",
+            &work,
+            "sam@work.example",
+            "tickets-tickets",
+            "",
+            "https://example.atlassian.net",
+        ),
+        login(
+            "Router admin",
+            &home,
+            "admin",
+            "blinking-lights-77",
+            "",
+            "http://192.168.1.1",
+        ),
+        login(
+            "Bank",
+            &money,
+            "10293847",
+            "save-more-spend-less",
+            "GEZDGNBVGY3TQOJQ",
+            "https://bank.example.com",
+        ),
+    ];
+    let mut card = Item::new(ItemKind::Card, None, Some(money.clone()));
+    card.name = "Everyday Visa".into();
+    card.favorite = true;
+    card.card.cardholder_name = "Sam Example".into();
+    card.card.brand = "Visa".into();
+    card.card.number = "4111 1111 1111 1111".into();
+    card.card.exp_month = "8".into();
+    card.card.exp_year = "2029".into();
+    card.card.code = "123".into();
+    items.push(card);
+    let mut note = Item::new(ItemKind::SecureNote, None, Some(home));
+    note.name = "Home Wi-Fi".into();
+    note.notes = "Network: Honeycomb\nGuest network: Honeycomb-Guest".into();
+    items.push(note);
+    let mut id = Item::new(ItemKind::Identity, None, None);
+    id.name = "Passport".into();
+    for (k, v) in [
+        ("firstName", "Sam"),
+        ("lastName", "Example"),
+        ("email", "sam@example.org"),
+        ("passportNumber", "X12345678"),
+    ] {
+        id.identity.insert(k.into(), v.into());
+    }
+    items.push(id);
+    let mut ssh = Item::new(ItemKind::SshKey, None, Some(code));
+    ssh.name = "Deploy key".into();
+    ssh.ssh_key.public_key =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleOnlyNotARealKey demo".into();
+    ssh.ssh_key.fingerprint = "SHA256:q9Vb3L1kz7cYpQ2mXoW8eR4tN6uA0sDfGhJk5lZxC1E".into();
+    ssh.ssh_key.private_key = "(example private key, not a real one)".into();
+    items.push(ssh);
+    for item in &items {
+        session.save(&store, item).unwrap();
+    }
+    session.sync(&store).unwrap();
+    println!("DEMO {email} / {password}");
+}

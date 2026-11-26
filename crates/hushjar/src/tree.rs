@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::mock::{Account, Item, ItemType};
+use crate::model::{Account, Item, ItemType};
 use crate::{RowIcon, RowKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

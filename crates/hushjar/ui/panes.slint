@@ -1,0 +1,289 @@
+import { LineEdit, CheckBox } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { Icon, ActionButton, Avatar, Segmented } from "widgets.slint";
+import { SignInForm, AccountSummary } from "types.slint";
+
+component Card inherits Rectangle {
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 10px;
+        @children
+    }
+}
+
+component Label inherits Text {
+    font-size: Theme.small;
+    color: Theme.muted;
+}
+
+component ErrorText inherits Text {
+    font-size: Theme.small;
+    color: Theme.danger;
+    wrap: word-wrap;
+}
+
+export component SignInPane inherits Rectangle {
+    in property <SignInForm> form;
+    callback submit(int, string, string, string);
+    callback submit-code(int, string, bool);
+    callback send-email(int);
+    callback cancel();
+
+    property <int> choice: root.form.server-choice;
+    property <int> provider: root.form.provider-index;
+
+    background: Theme.window;
+
+    VerticalLayout {
+        alignment: center;
+        padding: 16px;
+
+        HorizontalLayout {
+            alignment: center;
+
+            Card {
+                width: min(420px, root.width - 32px);
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    VerticalLayout {
+                        alignment: center;
+                        Icon { source: Icons.jar; width: 26px; height: 26px; tint: Theme.honey; }
+                    }
+                    Text {
+                        text: root.form.reconnect ? "Sign in again" : root.form.stage == 0 ? "Add an account" : "Two-step login";
+                        font-size: 18px;
+                        font-weight: 600;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if root.form.stage == 0: VerticalLayout {
+                    spacing: 10px;
+
+                    Label { text: "Server"; }
+                    Segmented {
+                        options: ["bitwarden.com", "bitwarden.eu", "Self-hosted"];
+                        current: root.choice;
+                        picked(index) => { root.choice = index; }
+                    }
+                    url := LineEdit {
+                        visible: root.choice == 2;
+                        height: root.choice == 2 ? self.preferred-height : 0px;
+                        text: root.form.url;
+                        placeholder-text: "https://vault.example.org";
+                    }
+                    Label { text: "Email"; }
+                    email := LineEdit {
+                        text: root.form.email;
+                        placeholder-text: "you@example.org";
+                        input-type: InputType.text;
+                    }
+                    Label { text: "Master password"; }
+                    password := LineEdit {
+                        input-type: InputType.password;
+                        placeholder-text: "Master password";
+                        accepted => {
+                            root.submit(root.choice, url.text, email.text, self.text);
+                        }
+                    }
+                    if root.form.error != "": ErrorText { text: root.form.error; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        ActionButton {
+                            text: "Cancel";
+                            clicked => { root.cancel(); }
+                        }
+                        ActionButton {
+                            text: root.form.busy ? "Signing in…" : "Sign in";
+                            primary: true;
+                            enabled: !root.form.busy;
+                            clicked => { root.submit(root.choice, url.text, email.text, password.text); }
+                        }
+                    }
+                    Text {
+                        text: "Your master password never leaves this computer; only a hash of it is sent.";
+                        font-size: Theme.small;
+                        color: Theme.faint;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if root.form.stage == 1: VerticalLayout {
+                    spacing: 10px;
+
+                    if root.form.providers.length > 1: Segmented {
+                        options: root.form.providers;
+                        current: root.provider;
+                        picked(index) => { root.provider = index; }
+                    }
+                    Text {
+                        text: root.form.email-provider
+                            ? "Enter the code sent to your email, or ask for a new one."
+                            : "Enter the code from your authenticator app.";
+                        wrap: word-wrap;
+                        color: Theme.text;
+                    }
+                    code := LineEdit {
+                        placeholder-text: "Code";
+                        accepted => { root.submit-code(root.provider, self.text, remember.checked); }
+                    }
+                    remember := CheckBox {
+                        text: "Remember this device";
+                        checked: true;
+                    }
+                    if root.form.error != "": ErrorText { text: root.form.error; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        if root.form.email-provider: ActionButton {
+                            text: "Email me a code";
+                            enabled: !root.form.busy;
+                            clicked => { root.send-email(root.provider); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        ActionButton {
+                            text: "Cancel";
+                            clicked => { root.cancel(); }
+                        }
+                        ActionButton {
+                            text: root.form.busy ? "Checking…" : "Continue";
+                            primary: true;
+                            enabled: !root.form.busy;
+                            clicked => { root.submit-code(root.provider, code.text, remember.checked); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component AccountPane inherits Rectangle {
+    in property <AccountSummary> account;
+    callback sync();
+    callback lock();
+    callback remove();
+    callback reconnect(string, string, bool);
+
+    property <bool> confirming;
+
+    background: Theme.window;
+
+    VerticalLayout {
+        alignment: center;
+        padding: 16px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            alignment: center;
+            Avatar { initials: root.account.initials; tint: root.account.tint; size: 52px; }
+        }
+        Text {
+            text: root.account.email;
+            horizontal-alignment: center;
+            font-size: 16px;
+            font-weight: 600;
+            color: Theme.text;
+        }
+        Text {
+            text: root.account.server + " · " + (root.account.count == 1 ? "1 item" : root.account.count + " items");
+            horizontal-alignment: center;
+            font-size: Theme.small;
+            color: Theme.muted;
+        }
+        Text {
+            text: root.account.status;
+            horizontal-alignment: center;
+            font-size: Theme.small;
+            color: root.account.needs-sign-in ? Theme.danger : Theme.faint;
+            wrap: word-wrap;
+        }
+
+        if !root.confirming: HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            ActionButton {
+                text: root.account.busy ? "Syncing…" : "Sync now";
+                has-icon: true;
+                icon: Icons.sync;
+                enabled: !root.account.busy;
+                clicked => { root.sync(); }
+            }
+            ActionButton {
+                text: "Lock";
+                has-icon: true;
+                icon: Icons.lock;
+                clicked => { root.lock(); }
+            }
+            ActionButton {
+                text: "Remove…";
+                danger: true;
+                clicked => { root.confirming = true; }
+            }
+        }
+        if root.confirming: VerticalLayout {
+            spacing: 8px;
+            Text {
+                text: "Remove this account from this computer? Its vault stays on the server.";
+                horizontal-alignment: center;
+                wrap: word-wrap;
+                color: Theme.text;
+            }
+            HorizontalLayout {
+                alignment: center;
+                spacing: 8px;
+                ActionButton { text: "Keep it"; clicked => { root.confirming = false; } }
+                ActionButton {
+                    text: "Remove";
+                    danger: true;
+                    clicked => {
+                        root.confirming = false;
+                        root.remove();
+                    }
+                }
+            }
+        }
+
+        if root.account.needs-sign-in: HorizontalLayout {
+            alignment: center;
+            Card {
+                width: min(380px, root.width - 32px);
+                Text {
+                    text: "Sign in again to sync this account";
+                    font-weight: 600;
+                    color: Theme.text;
+                }
+                again := LineEdit {
+                    input-type: InputType.password;
+                    placeholder-text: "Master password";
+                }
+                again-code := LineEdit {
+                    visible: root.account.two-factor;
+                    height: root.account.two-factor ? self.preferred-height : 0px;
+                    placeholder-text: "Two-step login code";
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    ActionButton {
+                        text: root.account.busy ? "Signing in…" : "Sign in";
+                        primary: true;
+                        enabled: !root.account.busy;
+                        clicked => {
+                            root.reconnect(again.text, again-code.text, true);
+                            again.text = "";
+                            again-code.text = "";
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

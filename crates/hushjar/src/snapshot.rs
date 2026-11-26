@@ -1,8 +1,10 @@
-//! Development aid: walks the prototype through its main states and saves a
-//! PNG of the Hushjar window after each one, then quits. It captures only this
-//! window's own rendering, never the rest of the screen.
+//! Development aid: walks the app through its main states with a real
+//! (test) account and saves a PNG of the Hushjar window after each, then
+//! quits. It captures only this window's own rendering, never the screen.
 //!
-//! Build with `--features snapshot` and set `HUSHJAR_SNAPSHOT_DIR`.
+//! Build with `--features snapshot`, point HUSHJAR_DATA_DIR at a data folder
+//! with a signed-in test account, and set HUSHJAR_SNAPSHOT_DIR and
+//! HUSHJAR_SNAPSHOT_PASSWORD (the test account's password).
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -13,69 +15,103 @@ use slint::{ComponentHandle, Timer, TimerMode};
 
 use crate::AppWindow;
 
-type Step = (&'static str, fn(&AppWindow));
+/// A step: its file name, what to do, and how long to wait before capturing.
+type Step = (&'static str, fn(&AppWindow), u64);
+
+fn password() -> slint::SharedString {
+    std::env::var("HUSHJAR_SNAPSHOT_PASSWORD")
+        .unwrap_or_default()
+        .into()
+}
 
 const STEPS: &[Step] = &[
-    ("01-item", |_| {}),
-    ("02-edit", |w| w.invoke_begin_edit()),
-    ("03-filter", |w| {
-        w.invoke_cancel();
-        w.set_filter_text("git".into());
-        w.invoke_filter_edited("git".into());
-    }),
-    ("04-collections", |w| {
-        w.set_filter_text("".into());
-        w.invoke_filter_edited("".into());
-        w.invoke_group_by_picked(1);
-        w.invoke_row_clicked("w/o/Example Ltd".into());
-    }),
-    ("05-locked", |w| {
-        w.invoke_group_by_picked(0);
-        w.invoke_row_clicked("f".into());
-    }),
-    ("06-card", |w| {
-        w.invoke_row_toggled("p/f/Finance".into());
-        w.invoke_row_clicked("p/f/Finance/i/visa".into());
-    }),
-    ("07-leave-guard", |w| {
-        w.invoke_begin_edit();
-        w.invoke_edit_name("Everyday Visa card".into());
-        w.invoke_row_clicked("p/f/Finance/i/bank".into());
-    }),
+    ("01-locked", |_| {}, 800),
+    ("02-unlocked", |w| w.invoke_unlock(password()), 5000),
+    (
+        "03-item",
+        |w| {
+            w.set_filter_text("github".into());
+            w.invoke_filter_edited("github".into());
+            w.invoke_filter_accepted();
+        },
+        800,
+    ),
+    ("04-edit", |w| w.invoke_begin_edit(), 800),
+    (
+        "05-tree",
+        |w| {
+            w.invoke_cancel();
+            w.set_filter_text("".into());
+            w.invoke_filter_edited("".into());
+        },
+        800,
+    ),
+    ("06-types", |w| w.invoke_group_by_picked(2), 800),
+    (
+        "07-add-account",
+        |w| {
+            w.invoke_group_by_picked(0);
+            w.invoke_add_account();
+        },
+        800,
+    ),
 ];
 
-pub fn run(window: &AppWindow, dir: PathBuf) -> Timer {
+pub fn run(window: &AppWindow, dir: PathBuf) -> Rc<Timer> {
     std::fs::create_dir_all(&dir).expect("create snapshot directory");
-    let weak = window.as_weak();
+    let timer = Rc::new(Timer::default());
     let step = Rc::new(Cell::new(0usize));
-    let timer = Timer::default();
-    // Odd ticks apply a step, even ticks capture it once it has rendered.
-    timer.start(TimerMode::Repeated, Duration::from_millis(700), move || {
-        let Some(w) = weak.upgrade() else { return };
-        let tick = step.get();
-        step.set(tick + 1);
-        let index = tick / 2;
-        let Some((name, action)) = STEPS.get(index) else {
-            let _ = slint::quit_event_loop();
-            return;
-        };
-        if tick.is_multiple_of(2) {
-            action(&w);
-            return;
-        }
-        match w.window().take_snapshot() {
-            Ok(buffer) => {
-                let path = dir.join(format!("{name}.png"));
-                if let Err(err) = save_png(&path, &buffer) {
-                    eprintln!("snapshot {name}: {err}");
-                } else {
-                    eprintln!("saved {}", path.display());
-                }
-            }
-            Err(err) => eprintln!("snapshot {name}: {err}"),
-        }
-    });
+    schedule(&timer, window.as_weak(), dir, step, 1500);
     timer
+}
+
+/// Runs the next step after `delay`, then captures it after its own wait.
+fn schedule(
+    timer: &Rc<Timer>,
+    weak: slint::Weak<AppWindow>,
+    dir: PathBuf,
+    step: Rc<Cell<usize>>,
+    delay: u64,
+) {
+    let next = timer.clone();
+    timer.start(
+        TimerMode::SingleShot,
+        Duration::from_millis(delay),
+        move || {
+            let Some(w) = weak.upgrade() else { return };
+            let Some((name, action, wait)) = STEPS.get(step.get()) else {
+                let _ = slint::quit_event_loop();
+                return;
+            };
+            action(&w);
+            let (weak2, dir2, step2, timer2) =
+                (weak.clone(), dir.clone(), step.clone(), next.clone());
+            next.start(
+                TimerMode::SingleShot,
+                Duration::from_millis(*wait),
+                move || {
+                    if let Some(w) = weak2.upgrade() {
+                        capture(&w, &dir2, name);
+                    }
+                    step2.set(step2.get() + 1);
+                    schedule(&timer2, weak2.clone(), dir2.clone(), step2.clone(), 200);
+                },
+            );
+        },
+    );
+}
+
+fn capture(w: &AppWindow, dir: &std::path::Path, name: &str) {
+    match w.window().take_snapshot() {
+        Ok(buffer) => {
+            let path = dir.join(format!("{name}.png"));
+            match save_png(&path, &buffer) {
+                Ok(()) => eprintln!("saved {}", path.display()),
+                Err(err) => eprintln!("snapshot {name}: {err}"),
+            }
+        }
+        Err(err) => eprintln!("snapshot {name}: {err}"),
+    }
 }
 
 fn save_png(

@@ -4,13 +4,13 @@ import { Icon, IconButton, ActionButton } from "widgets.slint";
 import { VaultTree } from "tree.slint";
 import { DetailsPane } from "details.slint";
 import {
-    AccountBadge, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode, RowIcon,
-    RowKind, TreeRow,
+    AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode,
+    RowIcon, RowKind, SignInForm, TreeRow,
 } from "types.slint";
 
 export {
-    AccountBadge, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode, RowIcon,
-    RowKind, TreeRow, Palette,
+    AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode,
+    RowIcon, RowKind, SignInForm, TreeRow, Palette,
 }
 
 component TopBar inherits Rectangle {
@@ -133,6 +133,11 @@ export component AppWindow inherits Window {
     in property <string> unlock-error;
     in property <GroupSummary> group;
     in property <int> unlock-focus-request;
+    in property <SignInForm> sign-in;
+    in property <AccountSummary> summary;
+    in property <bool> busy;
+    in property <[string]> item-types;
+    in property <int> type-index;
 
     in property <string> sync-text;
     in property <string> toast;
@@ -171,32 +176,33 @@ export component AppWindow inherits Window {
     callback delete-item();
     callback restore-item();
     callback unlock(string);
+    callback pick-type(int);
+    callback create-folder(string);
+    callback sign-in-submit(int, string, string, string);
+    callback sign-in-code(int, string, bool);
+    callback sign-in-email(int);
+    callback sign-in-cancel();
+    callback account-sync();
+    callback account-lock();
+    callback account-remove();
+    callback account-reconnect(string, string, bool);
+    // Any key press or click, for the inactivity lock.
+    callback activity();
 
     callback sync();
     callback new-item();
     callback not-yet(string);
     callback lock-all();
 
-    // The prototype uses Slint's own clipboard support through a hidden text
-    // field. Real clipboard handling, with clearing and password hints, comes in M3.
-    public function copy-text(text: string) {
-        clip.text = text;
-        clip.select-all();
-        clip.copy();
-        clip.text = "";
-    }
-
     public function focus-tree() {
         tree.focus-tree();
     }
 
-    clip := TextInput {
-        visible: false;
-        width: 0;
-        height: 0;
-    }
-
     scope := FocusScope {
+        capture-key-pressed(event) => {
+            root.activity();
+            reject
+        }
         KeyBinding { keys: @keys(Control + F); activated => { root.sidebar-visible = true; tree.focus-filter(); } }
         KeyBinding { keys: @keys(Control + E); activated => { root.begin-edit(); } }
         KeyBinding { keys: @keys(Control + S); activated => { root.save(); } }
@@ -277,6 +283,21 @@ export component AppWindow inherits Window {
                     unlock-error: root.unlock-error;
                     group: root.group;
                     unlock-focus-request: root.unlock-focus-request;
+                    sign-in: root.sign-in;
+                    summary: root.summary;
+                    busy: root.busy;
+                    item-types: root.item-types;
+                    type-index: root.type-index;
+                    pick-type(index) => { root.pick-type(index); }
+                    create-folder(name) => { root.create-folder(name); }
+                    sign-in-submit(choice, url, email, password) => { root.sign-in-submit(choice, url, email, password); }
+                    sign-in-code(provider, code, remember) => { root.sign-in-code(provider, code, remember); }
+                    sign-in-email(provider) => { root.sign-in-email(provider); }
+                    sign-in-cancel => { root.sign-in-cancel(); }
+                    account-sync => { root.account-sync(); }
+                    account-lock => { root.account-lock(); }
+                    account-remove => { root.account-remove(); }
+                    account-reconnect(password, code, remember) => { root.account-reconnect(password, code, remember); }
                     copy-field(s, f) => { root.copy-field(s, f); }
                     open-url(url) => { root.open-url(url); }
                     begin-edit => { root.begin-edit(); }

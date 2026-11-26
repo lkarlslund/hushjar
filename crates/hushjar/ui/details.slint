@@ -1,8 +1,10 @@
-import { ScrollView, LineEdit, TextEdit, Switch } from "std-widgets.slint";
+import { ScrollView, LineEdit, TextEdit, Switch, ComboBox } from "std-widgets.slint";
+import { SignInPane, AccountPane } from "panes.slint";
 import { Theme, Icons } from "theme.slint";
-import { Icon, IconButton, ActionButton, Avatar, TypeTile } from "widgets.slint";
+import { Icon, IconButton, ActionButton, Avatar, TypeTile, Segmented } from "widgets.slint";
 import {
-    AccountBadge, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode, RowIcon,
+    AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode, RowIcon,
+    SignInForm,
 } from "types.slint";
 
 // A read-only field with copy, show and open buttons.
@@ -250,6 +252,11 @@ export component DetailsPane inherits Rectangle {
     in property <AccountBadge> account;
     in property <string> unlock-error;
     in property <GroupSummary> group;
+    in property <SignInForm> sign-in;
+    in property <AccountSummary> summary;
+    in property <bool> busy;
+    in property <[string]> item-types;
+    in property <int> type-index;
 
     callback copy-field(int, int);
     callback open-url(string);
@@ -270,6 +277,16 @@ export component DetailsPane inherits Rectangle {
     callback delete-item();
     callback restore-item();
     callback unlock(string);
+    callback pick-type(int);
+    callback create-folder(string);
+    callback sign-in-submit(int, string, string, string);
+    callback sign-in-code(int, string, bool);
+    callback sign-in-email(int);
+    callback sign-in-cancel();
+    callback account-sync();
+    callback account-lock();
+    callback account-remove();
+    callback account-reconnect(string, string, bool);
 
     // Bump this to move keyboard focus into the unlock field.
     in property <int> unlock-focus-request;
@@ -357,7 +374,8 @@ export component DetailsPane inherits Rectangle {
                 }
             }
             ActionButton {
-                text: "Unlock";
+                text: root.busy ? "Unlocking…" : "Unlock";
+                enabled: !root.busy;
                 primary: true;
                 has-icon: true;
                 icon: Icons.lock;
@@ -373,6 +391,22 @@ export component DetailsPane inherits Rectangle {
             font-size: Theme.small;
             color: Theme.danger;
         }
+    }
+
+    if root.mode == PaneMode.sign-in: SignInPane {
+        form: root.sign-in;
+        submit(choice, url, email, password) => { root.sign-in-submit(choice, url, email, password); }
+        submit-code(provider, code, remember) => { root.sign-in-code(provider, code, remember); }
+        send-email(provider) => { root.sign-in-email(provider); }
+        cancel => { root.sign-in-cancel(); }
+    }
+
+    if root.mode == PaneMode.account: AccountPane {
+        account: root.summary;
+        sync => { root.account-sync(); }
+        lock => { root.account-lock(); }
+        remove => { root.account-remove(); }
+        reconnect(password, code, remember) => { root.account-reconnect(password, code, remember); }
     }
 
     // An item
@@ -466,7 +500,7 @@ export component DetailsPane inherits Rectangle {
                                     size: 30px;
                                     clicked => { root.toggle-favorite(); }
                                 }
-                                if !root.editing && !root.header.deleted: ActionButton {
+                                if !root.editing && !root.header.deleted && root.header.editable: ActionButton {
                                     text: "Edit";
                                     has-icon: true;
                                     icon: Icons.pencil;
@@ -476,7 +510,7 @@ export component DetailsPane inherits Rectangle {
                                     text: "Restore";
                                     clicked => { root.restore-item(); }
                                 }
-                                if !root.editing: IconButton {
+                                if !root.editing && root.header.editable: IconButton {
                                     icon: Icons.trash;
                                     label: root.header.deleted ? "Delete permanently" : "Move to trash";
                                     size: 30px;
@@ -486,42 +520,45 @@ export component DetailsPane inherits Rectangle {
                         }
                     }
 
-                    if root.editing: HorizontalLayout {
+                    if root.editing && root.header.is-new: Segmented {
+                        options: root.item-types;
+                        current: root.type-index;
+                        picked(index) => { root.pick-type(index); }
+                    }
+
+                    if root.editing: folder-row := HorizontalLayout {
                         spacing: 8px;
+                        property <bool> adding;
                         Text {
                             text: "Folder";
                             vertical-alignment: center;
                             font-size: Theme.small;
                             color: Theme.muted;
                         }
-                        folder-box := Rectangle {
-                            height: 30px;
+                        if !folder-row.adding: ComboBox {
                             horizontal-stretch: 1;
-                            HorizontalLayout {
-                                spacing: 4px;
-                                for name[i] in root.folders: Rectangle {
-                                    height: 26px;
-                                    width: folder-text.preferred-width + 18px;
-                                    border-radius: 13px;
-                                    background: i == root.folder-index ? Theme.selection : folder-touch.has-hover ? Theme.hover : transparent;
-                                    border-width: 1px;
-                                    border-color: i == root.folder-index ? Theme.honey.with-alpha(0.6) : Theme.border;
-                                    accessible-role: radio-button;
-                                    accessible-label: name;
-                                    accessible-checked: i == root.folder-index;
-                                    accessible-action-default => { root.pick-folder(i); }
-                                    folder-text := Text {
-                                        text: name;
-                                        font-size: Theme.small;
-                                        color: i == root.folder-index ? Theme.honey-text : Theme.muted;
-                                    }
-                                    folder-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => { root.pick-folder(i); }
-                                    }
-                                }
-                                Rectangle {}
+                            model: root.folders;
+                            current-index: root.folder-index;
+                            selected => { root.pick-folder(self.current-index); }
+                        }
+                        if !folder-row.adding: ActionButton {
+                            text: "New folder";
+                            has-icon: true;
+                            icon: Icons.plus;
+                            clicked => { folder-row.adding = true; }
+                        }
+                        if folder-row.adding: new-folder := LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "Folder name (use / to nest)";
+                            init => { self.focus(); }
+                            accepted(text) => {
+                                if (text != "") { root.create-folder(text); }
+                                folder-row.adding = false;
                             }
+                        }
+                        if folder-row.adding: ActionButton {
+                            text: "Cancel";
+                            clicked => { folder-row.adding = false; }
                         }
                     }
 
@@ -568,7 +605,7 @@ export component DetailsPane inherits Rectangle {
                     }
 
                     if !root.editing: Text {
-                        text: "Double-click a field or press Ctrl+E to edit";
+                        text: root.header.editable ? "Double-click a field or press Ctrl+E to edit" : "This item is read-only here";
                         horizontal-alignment: center;
                         font-size: Theme.small;
                         color: Theme.faint;
@@ -610,11 +647,11 @@ export component DetailsPane inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     ActionButton {
-                        text: "Save";
+                        text: root.busy ? "Saving…" : "Save";
                         primary: true;
                         has-icon: true;
                         icon: Icons.check;
-                        enabled: root.dirty;
+                        enabled: root.dirty && !root.busy;
                         clicked => { root.save(); }
                     }
                 }
