@@ -137,13 +137,21 @@ fn settings_changed(win: &AppWindow, st: &Shared) {
 
 /// Puts the preferences into effect.
 pub(super) fn apply_prefs(win: &AppWindow, st: &Shared) {
-    let state = st.borrow();
-    let scheme = match state.prefs.theme {
-        ThemeChoice::System => state.system_scheme,
-        ThemeChoice::Light => slint::language::ColorScheme::Light,
-        ThemeChoice::Dark => slint::language::ColorScheme::Dark,
+    use slint::language::ColorScheme;
+    let theme = st.borrow().prefs.theme;
+    // "System" leaves the scheme alone unless a forced one has to be undone;
+    // setting it to Unknown would leave the standard widgets unstyled.
+    let scheme = match theme {
+        ThemeChoice::Light => Some(ColorScheme::Light),
+        ThemeChoice::Dark => Some(ColorScheme::Dark),
+        ThemeChoice::System if st.borrow().scheme_forced => Some(system_scheme(win)),
+        ThemeChoice::System => None,
     };
-    win.global::<crate::Palette>().set_color_scheme(scheme);
+    if let Some(scheme) = scheme {
+        win.global::<crate::Palette>().set_color_scheme(scheme);
+    }
+    st.borrow_mut().scheme_forced = theme != ThemeChoice::System;
+    let state = st.borrow();
     state.clipboard.borrow_mut().clear_after = state.prefs.clear_delay();
     let tray = state.prefs.tray;
     drop(state);
@@ -208,4 +216,15 @@ fn remove_pin(win: &AppWindow, st: &Shared, _account: usize) {
 
 fn set_system_auth(win: &AppWindow, st: &Shared, _account: usize, _on: bool) {
     toast(win, st, "System authentication is not connected yet");
+}
+
+/// The desktop's light or dark preference, as the window system reports it.
+fn system_scheme(win: &AppWindow) -> slint::language::ColorScheme {
+    use slint::language::ColorScheme;
+    use slint::winit_030::{WinitWindowAccessor, winit::window::Theme};
+    let theme = win.window().with_winit_window(|w| w.theme()).flatten();
+    match theme {
+        Some(Theme::Dark) => ColorScheme::Dark,
+        _ => ColorScheme::Light,
+    }
 }

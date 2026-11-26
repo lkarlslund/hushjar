@@ -153,8 +153,8 @@ pub struct State {
     /// Per SSH key ("account/item"): offered to the agent, and when to ask.
     ssh_settings: HashMap<String, (bool, AskMode)>,
     prefs: Prefs,
-    /// The desktop's own colour scheme, for the "System" theme.
-    system_scheme: slint::language::ColorScheme,
+    /// Whether a light or dark theme was forced on the window.
+    scheme_forced: bool,
     desktop: Integration,
     generator: Generator,
     transfer: Transfer,
@@ -368,7 +368,6 @@ impl App {
         let ssh_settings = load_ssh_settings(&store);
         let prefs = Prefs::from_settings(&store.read_settings());
         let generator = Generator::from_settings(&store.read_settings());
-        let system_scheme = window.global::<crate::Palette>().get_color_scheme();
         let state: Shared = Rc::new(RefCell::new(State {
             store,
             accounts,
@@ -393,7 +392,7 @@ impl App {
             prompts: VecDeque::new(),
             ssh_settings,
             prefs,
-            system_scheme,
+            scheme_forced: false,
             desktop: Integration::new(),
             generator,
             transfer: Transfer::default(),
