@@ -1429,6 +1429,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
 dependencies = [
+ "pkcs8",
  "signature",
 ]
 
@@ -2233,16 +2234,19 @@ dependencies = [
  "base64",
  "cbc",
  "csv",
+ "ed25519-dalek",
  "getrandom 0.4.3",
  "hkdf",
  "hmac",
  "pbkdf2",
+ "pkcs8",
  "rmpv",
  "rsa",
  "serde",
  "serde_json",
  "sha1",
  "sha2",
+ "ssh-key",
  "thiserror 2.0.21",
  "tungstenite",
  "ureq",
@@ -4108,12 +4112,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "pkcs5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63d440a804ec8d6fafbb6b84471e013286658d373248927692ab3366686220ca"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "cbc",
+ "der",
+ "pbkdf2",
+ "rand_core",
+ "scrypt",
+ "sha2",
+ "spki",
+]
+
+[[package]]
 name = "pkcs8"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "451913da69c775a56034ea8d9003d27ee8948e12443eae7c038ba100a4f21cb7"
 dependencies = [
  "der",
+ "pkcs5",
+ "rand_core",
  "spki",
 ]
 
@@ -4695,6 +4718,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "salsa20"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f874456e72520ff1375a06c588eaf074b0f01f9e9e1aada45bd9b7954a6e42c"
+dependencies = [
+ "cfg-if",
+ "cipher",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4720,6 +4753,18 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "scrypt"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d87af57419b594aa23fa95f09f0e06d80d84ba01c26148c43844cad6ff4485f0"
+dependencies = [
+ "cfg-if",
+ "pbkdf2",
+ "salsa20",
+ "sha2",
+]
 
 [[package]]
 name = "sctk-adwaita"

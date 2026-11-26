@@ -12,6 +12,7 @@ pub mod notifications;
 pub mod policy;
 pub mod send;
 pub mod session;
+pub mod sshkey;
 pub mod store;
 pub mod totp;
 pub mod vault;
