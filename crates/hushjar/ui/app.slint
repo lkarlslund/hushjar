@@ -9,13 +9,48 @@ import { TransferData } from "transfer.slint";
 import { SendsData, SendRow } from "sends.slint";
 import {
     AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode,
-    RowIcon, RowKind, SignInForm, TreeRow,
+    RowIcon, RowKind, SignInForm, TreeRow, Platform,
 } from "types.slint";
 
 export {
     AccountBadge, AccountSummary, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode,
     RowIcon, RowKind, SignInForm, TreeRow, Palette, SettingsData, AccountSecurity, GeneratorData, GeneratedValue, TransferData,
-    SendsData, SendRow,
+    SendsData, SendRow, Platform,
+}
+
+// One entry of the top bar's overflow menu.
+component MenuEntry inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    callback clicked;
+
+    height: 40px;
+    border-radius: 4px;
+    background: touch.pressed ? Theme.pressed : touch.has-hover ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 12px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Icon { source: root.icon; }
+        }
+        Text {
+            text: root.text;
+            vertical-alignment: center;
+            color: Theme.text;
+            overflow: elide;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
 }
 
 component TopBar inherits Rectangle {
@@ -32,6 +67,15 @@ component TopBar inherits Rectangle {
     callback agent-clicked();
     in property <bool> agent-running;
     in property <int> agent-keys;
+    // Narrow window: one pane at a time, secondary buttons in a menu.
+    in property <bool> compact;
+    // In compact mode, whether the details pane is shown (so Back is offered).
+    in property <bool> details-open;
+    callback back();
+
+    property <string> agent-label: root.agent-running
+        ? "SSH agent: " + root.agent-keys + " keys offered"
+        : "SSH agent is not running";
 
     height: 44px;
     background: Theme.sidebar;
@@ -42,18 +86,33 @@ component TopBar inherits Rectangle {
         background: Theme.border;
     }
 
+    // Placed explicitly so the buttons do not set the window's minimum
+    // width: which buttons show depends on the width (compact).
     HorizontalLayout {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
         padding-left: 8px;
         padding-right: 10px;
         spacing: 4px;
 
-        VerticalLayout {
+        if !root.compact: VerticalLayout {
             alignment: center;
             IconButton {
                 icon: Icons.sidebar;
                 label: root.sidebar-visible ? "Hide sidebar" : "Show sidebar";
                 active: !root.sidebar-visible;
                 clicked => { root.toggle-sidebar(); }
+            }
+        }
+        if root.compact && root.details-open: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: Icons.back;
+                label: "Back";
+                size: 36px;
+                clicked => { root.back(); }
             }
         }
         Rectangle { width: 4px; }
@@ -69,7 +128,7 @@ component TopBar inherits Rectangle {
             color: Theme.text;
         }
         Rectangle { horizontal-stretch: 1; }
-        Text {
+        if !root.compact: Text {
             text: root.sync-text;
             vertical-alignment: center;
             font-size: Theme.small;
@@ -91,34 +150,64 @@ component TopBar inherits Rectangle {
             }
         }
         Rectangle { width: 6px; }
-        VerticalLayout {
+        if !root.compact && Platform.ssh-agent: VerticalLayout {
             alignment: center;
             IconButton {
                 icon: Icons.terminal;
-                label: root.agent-running ? "SSH agent: " + root.agent-keys + " keys offered" : "SSH agent is not running";
+                label: root.agent-label;
                 active: root.agent-running && root.agent-keys > 0;
                 clicked => { root.agent-clicked(); }
             }
         }
-        VerticalLayout {
+        if !root.compact: VerticalLayout {
             alignment: center;
             IconButton { icon: Icons.dice; label: "Generator (Ctrl+G)"; clicked => { root.generator(); } }
         }
-        VerticalLayout {
+        if !root.compact: VerticalLayout {
             alignment: center;
             IconButton { icon: Icons.send; label: "Send"; clicked => { root.send(); } }
         }
-        VerticalLayout {
+        if !root.compact: VerticalLayout {
             alignment: center;
             IconButton { icon: Icons.transfer; label: "Import and export"; clicked => { root.transfer(); } }
         }
-        VerticalLayout {
+        if !root.compact: VerticalLayout {
             alignment: center;
             IconButton { icon: Icons.settings; label: "Settings"; clicked => { root.settings(); } }
         }
         VerticalLayout {
             alignment: center;
             IconButton { icon: Icons.lock; label: "Lock all (Ctrl+L)"; clicked => { root.lock-all(); } }
+        }
+        if root.compact: VerticalLayout {
+            alignment: center;
+            IconButton { icon: Icons.more; label: "More"; clicked => { menu.show(); } }
+        }
+    }
+
+    menu := PopupWindow {
+        x: root.width - self.width - 6px;
+        y: root.height - 2px;
+        width: 230px;
+        Rectangle {
+            background: Theme.surface;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: Theme.border;
+            drop-shadow-blur: 10px;
+            drop-shadow-color: #00000033;
+            VerticalLayout {
+                padding: 4px;
+                MenuEntry { icon: Icons.dice; text: "Generator"; clicked => { menu.close(); root.generator(); } }
+                MenuEntry { icon: Icons.send; text: "Send"; clicked => { menu.close(); root.send(); } }
+                MenuEntry { icon: Icons.transfer; text: "Import and export"; clicked => { menu.close(); root.transfer(); } }
+                MenuEntry { icon: Icons.settings; text: "Settings"; clicked => { menu.close(); root.settings(); } }
+                if Platform.ssh-agent: MenuEntry {
+                    icon: Icons.terminal;
+                    text: root.agent-label;
+                    clicked => { menu.close(); root.agent-clicked(); }
+                }
+            }
         }
     }
 }
@@ -128,7 +217,8 @@ export component AppWindow inherits Window {
     icon: @image-url("icons/jar.svg");
     preferred-width: 1180px;
     preferred-height: 740px;
-    min-width: 720px;
+    // Below the compact width the window shows one pane at a time.
+    min-width: 360px;
     min-height: 360px;
     background: Theme.window;
     default-font-size: Theme.body;
@@ -171,6 +261,10 @@ export component AppWindow inherits Window {
     in property <int> ssh-mode;
     in-out property <bool> sidebar-visible: true;
     in-out property <length> sidebar-width: 320px;
+    // Narrow windows (phones) show either the tree or the details pane.
+    out property <bool> compact: root.width < 640px;
+    // In compact mode, whether the details pane replaces the tree.
+    in-out property <bool> details-open;
 
     callback filter-edited(string);
     callback filter-accepted();
@@ -232,20 +326,46 @@ export component AppWindow inherits Window {
 
     public function focus-tree() {
         tree.focus-tree();
+        root.details-open = false;
+    }
+
+    // Shows the details pane when one pane is shown at a time. The hidden
+    // tree would keep the keyboard focus, and hidden elements get no keys,
+    // so the window's own scope takes it: Back must keep working.
+    function open-details() {
+        root.details-open = true;
+        if (root.compact) {
+            scope.focus();
+        }
+    }
+
+    // Copies through Slint's own clipboard, which Android needs because it
+    // has no clipboard crate (see clipboard.rs). The text leaves the hidden
+    // input right after.
+    public function copy-to-clipboard(text: string) {
+        clip.text = text;
+        clip.select-all();
+        clip.copy();
+        clip.text = "";
     }
 
     scope := FocusScope {
         capture-key-pressed(event) => {
             root.activity();
+            // Android's Back key returns from the details to the tree.
+            if (event.text == Key.Back && root.compact && root.details-open) {
+                root.focus-tree();
+                return accept;
+            }
             reject
         }
         KeyBinding { keys: @keys(Control + F); activated => { root.sidebar-visible = true; tree.focus-filter(); } }
         KeyBinding { keys: @keys(Control + E); activated => { root.begin-edit(); } }
         KeyBinding { keys: @keys(Control + S); activated => { root.save(); } }
-        KeyBinding { keys: @keys(Control + N); activated => { root.new-item(); } }
+        KeyBinding { keys: @keys(Control + N); activated => { root.open-details(); root.new-item(); } }
         KeyBinding { keys: @keys(Control + L); activated => { root.lock-all(); } }
         KeyBinding { keys: @keys(Control + R); activated => { root.sync(); } }
-        KeyBinding { keys: @keys(Control + G); activated => { root.open-generator(); } }
+        KeyBinding { keys: @keys(Control + G); activated => { root.open-details(); root.open-generator(); } }
         KeyBinding { keys: @keys(Control + U); activated => { root.copy-shortcut("username"); } }
         KeyBinding { keys: @keys(Control + P); activated => { root.copy-shortcut("password"); } }
         KeyBinding { keys: @keys(Control + T); activated => { root.copy-shortcut("code"); } }
@@ -253,28 +373,47 @@ export component AppWindow inherits Window {
         KeyBinding { keys: @keys(Escape); enabled: root.editing; activated => { root.cancel(); } }
 
         VerticalLayout {
+            // Phones draw under the status and navigation bars.
+            padding-top: root.safe-area-insets.top;
+            padding-bottom: root.safe-area-insets.bottom;
+            padding-left: root.safe-area-insets.left;
+            padding-right: root.safe-area-insets.right;
+
             TopBar {
                 sync-text: root.sync-text;
                 sidebar-visible: root.sidebar-visible;
+                compact: root.compact;
+                details-open: root.details-open;
+                back => { root.focus-tree(); }
                 toggle-sidebar => { root.sidebar-visible = !root.sidebar-visible; }
                 sync => { root.sync(); }
-                new-item => { root.new-item(); }
-                generator => { root.open-generator(); }
-                send => { root.open-sends(); }
-                transfer => { root.open-transfer(); }
-                settings => { root.open-settings(); }
-                lock-all => { root.lock-all(); }
+                new-item => { root.open-details(); root.new-item(); }
+                generator => { root.open-details(); root.open-generator(); }
+                send => { root.open-details(); root.open-sends(); }
+                transfer => { root.open-details(); root.open-transfer(); }
+                settings => { root.open-details(); root.open-settings(); }
+                lock-all => { root.details-open = false; root.lock-all(); }
                 agent-running: root.agent-running;
                 agent-keys: root.agent-keys;
                 agent-clicked => { root.agent-clicked(); }
             }
 
-            HorizontalLayout {
+            // The panes are placed by hand rather than by a layout, so that
+            // compact mode can give either one the full width while both
+            // keep their state (scroll position, edits) when hidden.
+            body := Rectangle {
                 vertical-stretch: 1;
 
                 tree := VaultTree {
-                    visible: root.sidebar-visible;
-                    width: root.sidebar-visible ? root.sidebar-width : 0px;
+                    x: 0;
+                    y: 0;
+                    height: parent.height;
+                    visible: root.compact ? !root.details-open : root.sidebar-visible;
+                    width: root.compact
+                        ? (root.details-open ? 0px : parent.width)
+                        : (root.sidebar-visible ? root.sidebar-width : 0px);
+                    compact: root.compact;
+                    opened => { root.open-details(); }
                     rows: root.rows;
                     selected-key: root.selected-key;
                     selected-index: root.selected-index;
@@ -291,11 +430,14 @@ export component AppWindow inherits Window {
                     expand-selection => { root.expand-selection(); }
                     collapse-selection => { root.collapse-selection(); }
                     activate-selection => { root.activate-selection(); }
-                    add-account => { root.add-account(); }
+                    add-account => { root.open-details(); root.add-account(); }
                 }
 
                 // Draggable divider
-                if root.sidebar-visible: Rectangle {
+                if root.sidebar-visible && !root.compact: Rectangle {
+                    x: tree.width;
+                    y: 0;
+                    height: parent.height;
                     width: 1px;
                     background: Theme.border;
                     divider := TouchArea {
@@ -309,7 +451,11 @@ export component AppWindow inherits Window {
                 }
 
                 DetailsPane {
-                    horizontal-stretch: 1;
+                    x: root.compact ? 0px : tree.width + (root.sidebar-visible ? 1px : 0px);
+                    y: 0;
+                    height: parent.height;
+                    width: root.compact && !root.details-open ? 0px : parent.width - self.x;
+                    visible: !root.compact || root.details-open;
                     mode: root.mode;
                     header: root.header;
                     sections: root.sections;
@@ -423,6 +569,14 @@ export component AppWindow inherits Window {
             font-size: Theme.body;
             accessible-role: text;
         }
+    }
+
+    // Holds text only while copy-to-clipboard runs.
+    clip := TextInput {
+        visible: false;
+        width: 0px;
+        height: 0px;
+        single-line: false;
     }
 
     init => { scope.focus(); }

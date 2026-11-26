@@ -2,6 +2,7 @@ import { ScrollView, LineEdit, TextEdit } from "std-widgets.slint";
 import { Theme, Icons } from "theme.slint";
 import { Icon, ActionButton, Avatar, Toggle, Picker } from "widgets.slint";
 import { Card, Row, Hint, PaneTitle } from "cards.slint";
+import { Platform } from "types.slint";
 
 // One Send in the list.
 export struct SendRow {
@@ -313,7 +314,7 @@ export component SendsPane inherits Rectangle {
                     enabled: !SendsData.blocked;
                     clicked => { SendsData.new-text(); }
                 }
-                ActionButton {
+                if Platform.file-dialogs: ActionButton {
                     text: "New file Send";
                     has-icon: true;
                     icon: Icons.plus;

@@ -75,6 +75,8 @@ export global Icons {
     out property <image> sidebar: @image-url("icons/sidebar.svg");
     out property <image> check: @image-url("icons/check.svg");
     out property <image> jar: @image-url("icons/jar.svg");
+    out property <image> back: @image-url("icons/back.svg");
+    out property <image> more: @image-url("icons/more.svg");
 
     public pure function for-row(icon: RowIcon) -> image {
         if (icon == RowIcon.favorites) { return star-filled; }

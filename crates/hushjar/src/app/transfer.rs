@@ -417,11 +417,8 @@ fn choose_export_path(st: &Shared) {
         .as_ref()
         .map_or("json", |j| j.format.extension());
     std::thread::spawn(move || {
-        let path = rfd::FileDialog::new()
-            .set_title("Save export")
-            .set_file_name(name)
-            .add_filter(extension.to_uppercase(), &[extension])
-            .save_file();
+        let label = extension.to_uppercase();
+        let path = crate::dialogs::save_file("Save export", &name, (&label, &[extension]));
         on_ui(move |win, st| export_path_chosen(win, st, path));
     });
 }
@@ -476,11 +473,10 @@ fn pick_import_file(win: &AppWindow, st: &Shared) {
     st.borrow_mut().transfer.import_stage = ImportStage::Reading;
     render_transfer(win, st);
     std::thread::spawn(move || {
-        let picked = rfd::FileDialog::new()
-            .set_title("Choose a file to import")
-            .add_filter("Exports", &["json", "csv"])
-            .add_filter("All files", &["*"])
-            .pick_file();
+        let picked = crate::dialogs::pick_file(
+            "Choose a file to import",
+            &[("Exports", &["json", "csv"]), ("All files", &["*"])],
+        );
         let loaded = picked.map(|path| {
             let name = path
                 .file_name()

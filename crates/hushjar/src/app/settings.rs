@@ -141,7 +141,9 @@ pub(super) fn apply_prefs(win: &AppWindow, st: &Shared) {
     let scheme = match theme {
         ThemeChoice::Light => Some(ColorScheme::Light),
         ThemeChoice::Dark => Some(ColorScheme::Dark),
-        ThemeChoice::System if st.borrow().scheme_forced => Some(system_scheme(win)),
+        ThemeChoice::System if st.borrow().scheme_forced => {
+            Some(crate::platform::system_scheme(win))
+        }
         ThemeChoice::System => None,
     };
     if let Some(scheme) = scheme {
@@ -213,15 +215,4 @@ fn remove_pin(win: &AppWindow, st: &Shared, _account: usize) {
 
 fn set_system_auth(win: &AppWindow, st: &Shared, _account: usize, _on: bool) {
     toast(win, st, "System authentication is not connected yet");
-}
-
-/// The desktop's light or dark preference, as the window system reports it.
-fn system_scheme(win: &AppWindow) -> slint::language::ColorScheme {
-    use slint::language::ColorScheme;
-    use slint::winit_030::{WinitWindowAccessor, winit::window::Theme};
-    let theme = win.window().with_winit_window(|w| w.theme()).flatten();
-    match theme {
-        Some(Theme::Dark) => ColorScheme::Dark,
-        _ => ColorScheme::Light,
-    }
 }

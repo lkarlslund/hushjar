@@ -116,12 +116,7 @@ pub(super) fn change_ssh_setting(
 pub(super) fn show_prompt(win: &AppWindow, st: &Shared, prompt: Prompt) {
     st.borrow_mut().prompts.push_back(prompt);
     render_prompt(win, st);
-    use slint::winit_030::WinitWindowAccessor;
-    win.window().with_winit_window(|w| {
-        w.request_user_attention(Some(
-            slint::winit_030::winit::window::UserAttentionType::Critical,
-        ));
-    });
+    crate::platform::request_attention(win);
 }
 
 pub(super) fn render_prompt(win: &AppWindow, st: &Shared) {

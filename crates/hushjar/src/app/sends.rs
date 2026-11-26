@@ -705,9 +705,7 @@ fn pick_file(win: &AppWindow, st: &Shared) {
     let spawned = std::thread::Builder::new()
         .name("hushjar-file-dialog".into())
         .spawn(|| {
-            let result = rfd::FileDialog::new()
-                .set_title("Choose a file to share")
-                .pick_file()
+            let result = crate::dialogs::pick_file("Choose a file to share", &[])
                 .map(|path| read_picked(&path));
             on_ui(move |win, st| file_picked(win, st, result));
         });

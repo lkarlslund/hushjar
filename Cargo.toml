@@ -10,7 +10,9 @@ publish = false
 
 [workspace.dependencies]
 hushjar-core = { path = "crates/hushjar-core" }
-slint = { version = "1.19", features = ["unstable-winit-030"] }
+# Each crate adds its platform's features: winit on the desktop, the
+# android-activity backend on Android (see crates/hushjar/Cargo.toml).
+slint = "1.19"
 slint-build = "1.19"
 
 [workspace.lints.rust]

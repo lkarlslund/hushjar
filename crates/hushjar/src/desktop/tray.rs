@@ -22,6 +22,10 @@
 use super::Error;
 
 /// Something the user did in the tray. Delivered on the tray's thread.
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(dead_code, reason = "only the Linux implementation uses it")
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayEvent {
     /// The icon itself was clicked: show the window, or hide it if shown.
@@ -42,9 +46,17 @@ struct TrayState {
 
 /// One menu entry: a label and the event it sends, or `None` for an entry
 /// that cannot be chosen. `None` for the whole entry is a separator.
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(dead_code, reason = "only the Linux implementation uses it")
+)]
 type MenuEntry = Option<(String, Option<TrayEvent>)>;
 
 /// The menu for `state`, as plain data so it can be tested.
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(dead_code, reason = "only the Linux implementation uses it")
+)]
 fn menu_model(state: &TrayState) -> Vec<MenuEntry> {
     let mut entries = Vec::new();
     if !state.status.is_empty() {

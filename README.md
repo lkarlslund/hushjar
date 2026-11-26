@@ -3,7 +3,7 @@
 A desktop app for your secrets, written in Rust with [Slint](https://slint.dev).
 It works with Bitwarden and self-hosted Vaultwarden accounts. Linux on Wayland
 is the primary target; Windows and macOS builds are set up and checked by CI
-but have had little hands-on testing, and Android comes later. It
+but have had little hands-on testing, and an early Android build runs. It
 replaces VaultGoblin, an earlier Go and Wails client.
 
 The plan, including a checklist of Bitwarden features, is in
@@ -46,7 +46,12 @@ cargo test --workspace
 
 `HUSHJAR_DATA_DIR` overrides where accounts are stored. By default that is
 `~/.local/share/hushjar` on Linux, `~/Library/Application Support/Hushjar` on
-macOS and `%APPDATA%\Hushjar` on Windows.
+macOS, `%APPDATA%\Hushjar` on Windows and the app's private folder on
+Android.
+
+Windows narrower than 640 pixels, such as phones, show one pane at a time:
+the tree, or the details with a back button, and the secondary top-bar
+buttons move into a menu.
 
 ### Building on each system
 
@@ -61,8 +66,18 @@ macOS and `%APPDATA%\Hushjar` on Windows.
 - **macOS:** needs the Xcode command line tools. `scripts/package-macos.sh`
   writes `dist/Hushjar-<version>-macos-<arch>.zip` containing `Hushjar.app`,
   signed ad hoc only (Gatekeeper asks on first launch).
-- `scripts/make-icons.sh` regenerates the committed `.ico` and `.icns` from
-  `packaging/linux/io.github.lkarlslund.Hushjar.svg`.
+- **Android:** needs the Rust targets (`rustup target add aarch64-linux-android
+  x86_64-linux-android`), an Android SDK with a platform and build tools, the
+  NDK and a JDK. `scripts/build-android.sh` builds the app as a shared library
+  for arm64-v8a and x86_64 (or the ABIs named) and writes
+  `dist/hushjar-<version>-android-debug.apk`, without Gradle; `--release`
+  makes an optimised build, signed with `$ANDROID_KEYSTORE` when set. Install
+  it with `adb install -r <apk>`. Not on Android yet: the SSH agent, file
+  dialogs (so import, export and file Sends), the tray and other desktop
+  services. To reach a Vaultwarden on the computer from the emulator, run
+  `adb reverse tcp:18281 tcp:18281` and sign in to `http://127.0.0.1:18281`.
+- `scripts/make-icons.sh` regenerates the committed `.ico`, `.icns` and Android
+  launcher icons from `packaging/linux/io.github.lkarlslund.Hushjar.svg`.
 
 Pushing a tag `v*` makes the release workflow build all three packages and
 attach them to a draft GitHub release.

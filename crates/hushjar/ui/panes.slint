@@ -77,7 +77,9 @@ export component SignInPane inherits Rectangle {
                     }
                     url := LineEdit {
                         visible: root.choice == 2;
-                        height: root.choice == 2 ? self.preferred-height : 0px;
+                        // Fluent's LineEdit is 32px tall through its min-height; its
+                        // preferred height is only the text's, which squashed it.
+                        height: root.choice == 2 ? self.min-height : 0px;
                         text: root.form.url;
                         placeholder-text: "https://vault.example.org";
                     }
@@ -191,9 +193,11 @@ export component AccountPane inherits Rectangle {
             alignment: center;
             Avatar { initials: root.account.initials; tint: root.account.tint; size: 52px; }
         }
+        // Long addresses are cut short rather than widening a narrow pane.
         Text {
             text: root.account.email;
             horizontal-alignment: center;
+            overflow: elide;
             font-size: 16px;
             font-weight: 600;
             color: Theme.text;
@@ -201,6 +205,7 @@ export component AccountPane inherits Rectangle {
         Text {
             text: root.account.server + " · " + (root.account.count == 1 ? "1 item" : root.account.count + " items");
             horizontal-alignment: center;
+            overflow: elide;
             font-size: Theme.small;
             color: Theme.muted;
         }
@@ -272,7 +277,7 @@ export component AccountPane inherits Rectangle {
                 }
                 again-code := LineEdit {
                     visible: root.account.two-factor;
-                    height: root.account.two-factor ? self.preferred-height : 0px;
+                    height: root.account.two-factor ? self.min-height : 0px;
                     placeholder-text: "Two-step login code";
                 }
                 HorizontalLayout {

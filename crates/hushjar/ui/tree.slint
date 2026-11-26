@@ -110,7 +110,11 @@ export component VaultTree inherits Rectangle {
     in property <int> match-count;
     in property <int> group-by;
     in-out property <string> filter-text;
+    // One pane at a time: a tap on a group opens or closes it, and a tap on
+    // an item or account asks for the details pane (`opened`).
+    in property <bool> compact;
 
+    callback opened();
     callback filter-edited(string);
     callback filter-accepted();
     callback group-by-picked(int);
@@ -207,7 +211,7 @@ export component VaultTree inherits Rectangle {
                             visible: root.filter-text == "";
                             x: 0;
                             height: 100%;
-                            text: "Filter  (Ctrl+F)";
+                            text: root.compact ? "Filter" : "Filter  (Ctrl+F)";
                             vertical-alignment: center;
                             font-size: Theme.body;
                             color: Theme.faint;
@@ -275,7 +279,14 @@ export component VaultTree inherits Rectangle {
                     tree-focused: scope.has-focus;
                     clicked => {
                         scope.focus();
-                        root.row-clicked(row.key);
+                        if (root.compact && row.kind == RowKind.group) {
+                            root.row-toggled(row.key);
+                        } else {
+                            root.row-clicked(row.key);
+                            if (root.compact) {
+                                root.opened();
+                            }
+                        }
                     }
                     toggle => {
                         scope.focus();
@@ -286,7 +297,9 @@ export component VaultTree inherits Rectangle {
             }
 
             if root.rows.length == 0: Text {
-                text: "Nothing matches “" + root.filter-text + "”";
+                text: root.filter-text == ""
+                    ? "No accounts yet. Add one below."
+                    : "Nothing matches “" + root.filter-text + "”";
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 wrap: word-wrap;

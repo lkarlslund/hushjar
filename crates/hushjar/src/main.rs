@@ -1,29 +1,12 @@
 // A release build on Windows is a GUI program: no console window opens.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-slint::include_modules!();
+//! The desktop entry point. Android starts from `android_main` in the
+//! library instead (see `scripts/build-android.sh`).
 
-mod app;
-mod clipboard;
-mod desktop;
-mod exchange;
-#[cfg(test)]
-mod mock;
-mod model;
-mod pacing;
-mod prefs;
-#[cfg(feature = "snapshot")]
-mod snapshot;
-mod sshagent;
-mod tree;
-mod worker;
-
-/// The application ID: the Wayland app ID and X11 window class, matching
-/// the desktop entry and icon names in `packaging/linux`.
-pub const APP_ID: &str = "io.github.lkarlslund.Hushjar";
-
-/// Selects the winit backend and names the window after [`APP_ID`], so
-/// desktops can match it to its desktop entry, icon and window rules.
+/// Selects the winit backend and names the window after [`hushjar::APP_ID`],
+/// so desktops can match it to its desktop entry, icon and window rules.
+#[cfg(not(target_os = "android"))]
 fn select_backend() -> Result<(), slint::PlatformError> {
     slint::BackendSelector::new()
         .backend_name("winit".into())
@@ -31,45 +14,28 @@ fn select_backend() -> Result<(), slint::PlatformError> {
             #[cfg(all(unix, not(target_os = "macos")))]
             let attributes =
                 slint::winit_030::winit::platform::wayland::WindowAttributesExtWayland::with_name(
-                    attributes, APP_ID, "hushjar",
+                    attributes,
+                    hushjar::APP_ID,
+                    "hushjar",
                 );
             attributes
         })
         .select()
 }
 
+#[cfg(not(target_os = "android"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     select_backend()?;
     let root = match std::env::var_os("HUSHJAR_DATA_DIR") {
         Some(dir) => std::path::PathBuf::from(dir),
         None => hushjar_core::store::default_root().ok_or("no home folder to keep data in")?,
     };
-    let store = hushjar_core::store::Store::open(root)?;
-    let app = app::App::new(store)?;
+    hushjar::run(root)
+}
 
-    match std::env::var("HUSHJAR_COLOR_SCHEME").as_deref() {
-        Ok("light") => app
-            .window
-            .global::<Palette>()
-            .set_color_scheme(slint::language::ColorScheme::Light),
-        Ok("dark") => app
-            .window
-            .global::<Palette>()
-            .set_color_scheme(slint::language::ColorScheme::Dark),
-        _ => {}
-    }
-
-    #[cfg(feature = "snapshot")]
-    let _snapshots =
-        std::env::var_os("HUSHJAR_SNAPSHOT_DIR").map(|dir| snapshot::run(&app.window, dir.into()));
-
-    // Start in the tray only when there is a tray to come back from.
-    let hidden = desktop::autostart::started_hidden() && app.starts_in_tray();
-    if hidden {
-        app.note_hidden();
-    } else {
-        app.window.show()?;
-    }
-    slint::run_event_loop_until_quit()?;
-    Ok(())
+/// Android has no command-line program: the app is the shared library that
+/// the APK loads.
+#[cfg(target_os = "android")]
+fn main() {
+    eprintln!("On Android, Hushjar runs from its APK; see scripts/build-android.sh");
 }

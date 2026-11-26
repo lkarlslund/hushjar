@@ -67,6 +67,25 @@ const STEPS: &[Step] = &[
     // Leaves time for an SSH signing request from outside, then allows it.
     ("08-ssh-prompt", |_| {}, 4000),
     ("09-ssh-allowed", |w| w.invoke_ssh_answer(true), 800),
+    // A phone-sized window: one pane at a time.
+    (
+        "10-compact-tree",
+        |w| {
+            w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
+            w.invoke_focus_tree();
+        },
+        1000,
+    ),
+    (
+        "10b-compact-item",
+        |w| {
+            w.set_filter_text("github".into());
+            w.invoke_filter_edited("github".into());
+            w.invoke_filter_accepted();
+            w.set_details_open(true);
+        },
+        800,
+    ),
 ];
 
 pub fn run(window: &AppWindow, dir: PathBuf) -> Rc<Timer> {

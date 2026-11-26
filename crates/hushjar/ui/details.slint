@@ -362,6 +362,7 @@ export component DetailsPane inherits Rectangle {
         Text {
             text: root.account.email;
             horizontal-alignment: center;
+            overflow: elide;
             font-size: 16px;
             font-weight: 600;
             color: Theme.text;
@@ -444,6 +445,9 @@ export component DetailsPane inherits Rectangle {
                     min-width: 280px;
                     horizontal-stretch: 1;
                     spacing: 12px;
+                    // A short item on a tall screen keeps its natural height
+                    // instead of spreading its fields apart.
+                    alignment: start;
 
                     // Header
                     HorizontalLayout {
