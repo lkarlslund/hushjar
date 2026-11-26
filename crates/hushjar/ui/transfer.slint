@@ -1,0 +1,231 @@
+import { ScrollView, LineEdit } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { ActionButton, Picker } from "widgets.slint";
+import { Card, Row, Hint, PaneTitle } from "cards.slint";
+
+// Everything the import and export pane shows. Rust fills the option lists
+// and messages; the in-out properties are what the user typed or chose.
+export global TransferData {
+    // Unlocked accounts, shared by both cards.
+    in property <[string]> accounts;
+    in property <bool> any-account;
+
+    in-out property <int> export-account;
+    in property <[string]> export-what-options;
+    in-out property <int> export-what;
+    in property <[string]> export-format-options;
+    in-out property <int> export-format;
+    in property <bool> export-plain;
+    in property <bool> export-needs-file-password;
+    in-out property <string> export-file-password;
+    in-out property <string> export-file-confirm;
+    in-out property <string> master-password;
+    // Why exporting is not allowed right now, if it is not.
+    in property <string> export-blocked;
+    in property <string> export-error;
+    in property <string> export-result;
+    in property <bool> export-busy;
+
+    in-out property <int> import-account;
+    in property <[string]> import-folder-options;
+    in-out property <int> import-folder;
+    in property <[string]> import-format-options;
+    in-out property <int> import-format;
+    in property <string> import-file-name;
+    in property <bool> import-needs-password;
+    in-out property <string> import-file-password;
+    in property <string> import-preview;
+    in property <string> import-error;
+    in property <string> import-result;
+    in property <bool> import-busy;
+    in property <bool> import-ready;
+
+    callback export-account-picked(int);
+    callback export-what-picked(int);
+    callback export-format-picked(int);
+    callback export-clicked();
+    callback import-account-picked(int);
+    callback import-folder-picked(int);
+    callback import-format-picked(int);
+    callback pick-file();
+    callback continue-with-password();
+    callback import-clicked();
+}
+
+component Field inherits HorizontalLayout {
+    in property <string> label;
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <bool> enabled: true;
+    in property <bool> secret: true;
+    callback accepted();
+    spacing: 12px;
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+        Text { text: root.label; color: Theme.text; wrap: word-wrap; }
+    }
+    LineEdit {
+        width: 220px;
+        enabled: root.enabled;
+        input-type: root.secret ? InputType.password : InputType.text;
+        placeholder-text: root.placeholder;
+        text <=> root.text;
+        accepted => { root.accepted(); }
+    }
+}
+
+component Message inherits Text {
+    in property <bool> bad;
+    font-size: Theme.small;
+    color: root.bad ? Theme.danger : Theme.faint;
+    wrap: word-wrap;
+}
+
+export component TransferPane inherits Rectangle {
+    background: Theme.window;
+
+    ScrollView {
+        VerticalLayout {
+            alignment: start;
+            padding: 16px;
+            padding-top: 20px;
+            spacing: 14px;
+
+            PaneTitle { icon: Icons.transfer; text: "Import and export"; }
+
+            if !TransferData.any-account: Card {
+                title: "Nothing to do yet";
+                Hint { text: "Unlock an account to import into it or export from it."; }
+            }
+
+            if TransferData.any-account: Card {
+                title: "Export";
+                Row {
+                    label: "Account";
+                    Picker {
+                        width: 220px;
+                        options: TransferData.accounts;
+                        current: TransferData.export-account;
+                        picked(index) => { TransferData.export-account-picked(index); }
+                    }
+                }
+                Row {
+                    label: "What to export";
+                    Picker {
+                        width: 220px;
+                        options: TransferData.export-what-options;
+                        current: TransferData.export-what;
+                        picked(index) => { TransferData.export-what-picked(index); }
+                    }
+                }
+                Row {
+                    label: "Format";
+                    Picker {
+                        width: 220px;
+                        options: TransferData.export-format-options;
+                        current: TransferData.export-format;
+                        picked(index) => { TransferData.export-format-picked(index); }
+                    }
+                }
+                if TransferData.export-needs-file-password: Field {
+                    label: "File password";
+                    placeholder: "Needed to open the file";
+                    text <=> TransferData.export-file-password;
+                }
+                if TransferData.export-needs-file-password: Field {
+                    label: "Repeat file password";
+                    text <=> TransferData.export-file-confirm;
+                }
+                if TransferData.export-plain: Message {
+                    bad: true;
+                    text: "Anyone who gets this file can read your passwords. Keep it somewhere safe and delete it when you are done.";
+                }
+                Field {
+                    label: "Your master password";
+                    placeholder: "To confirm it is you";
+                    text <=> TransferData.master-password;
+                    accepted => { TransferData.export-clicked(); }
+                }
+                if TransferData.export-blocked != "": Message { bad: true; text: TransferData.export-blocked; }
+                if TransferData.export-error != "": Message { bad: true; text: TransferData.export-error; }
+                if TransferData.export-result != "": Message { text: TransferData.export-result; }
+                HorizontalLayout {
+                    alignment: end;
+                    ActionButton {
+                        text: TransferData.export-busy ? "Exporting…" : "Export…";
+                        primary: true;
+                        enabled: !TransferData.export-busy && TransferData.export-blocked == "";
+                        clicked => { TransferData.export-clicked(); }
+                    }
+                }
+            }
+
+            if TransferData.any-account: Card {
+                title: "Import";
+                Row {
+                    label: "Account";
+                    Picker {
+                        width: 220px;
+                        options: TransferData.accounts;
+                        current: TransferData.import-account;
+                        picked(index) => { TransferData.import-account-picked(index); }
+                    }
+                }
+                Row {
+                    label: "Put the items in";
+                    Picker {
+                        width: 220px;
+                        options: TransferData.import-folder-options;
+                        current: TransferData.import-folder;
+                        picked(index) => { TransferData.import-folder-picked(index); }
+                    }
+                }
+                Row {
+                    label: "File format";
+                    Picker {
+                        width: 220px;
+                        options: TransferData.import-format-options;
+                        current: TransferData.import-format;
+                        picked(index) => { TransferData.import-format-picked(index); }
+                    }
+                }
+                Row {
+                    label: "File";
+                    hint: TransferData.import-file-name;
+                    ActionButton {
+                        text: "Choose file…";
+                        enabled: !TransferData.import-busy;
+                        clicked => { TransferData.pick-file(); }
+                    }
+                }
+                if TransferData.import-needs-password: Field {
+                    label: "Password of this file";
+                    placeholder: "The one used when it was exported";
+                    text <=> TransferData.import-file-password;
+                    accepted => { TransferData.continue-with-password(); }
+                }
+                if TransferData.import-needs-password: HorizontalLayout {
+                    alignment: end;
+                    ActionButton {
+                        text: "Open file";
+                        enabled: !TransferData.import-busy;
+                        clicked => { TransferData.continue-with-password(); }
+                    }
+                }
+                if TransferData.import-preview != "": Message { text: TransferData.import-preview; }
+                if TransferData.import-error != "": Message { bad: true; text: TransferData.import-error; }
+                if TransferData.import-result != "": Message { text: TransferData.import-result; }
+                HorizontalLayout {
+                    alignment: end;
+                    ActionButton {
+                        text: TransferData.import-busy ? "Working…" : "Import";
+                        primary: true;
+                        enabled: TransferData.import-ready && !TransferData.import-busy;
+                        clicked => { TransferData.import-clicked(); }
+                    }
+                }
+            }
+        }
+    }
+}

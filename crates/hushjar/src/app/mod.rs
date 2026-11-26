@@ -28,6 +28,7 @@ mod integration;
 mod settings;
 mod sign_in;
 mod ssh;
+mod transfer;
 mod view;
 mod wire;
 
@@ -38,6 +39,9 @@ use integration::Integration;
 use settings::*;
 use sign_in::*;
 use ssh::*;
+use transfer::{
+    Transfer, forget_transfer, handle_transfer_event, render_transfer, show_transfer, wire_transfer,
+};
 use view::*;
 use wire::*;
 
@@ -56,6 +60,7 @@ enum Shown {
     SignIn,
     Settings,
     Generator,
+    Transfer,
 }
 
 struct Draft {
@@ -80,6 +85,7 @@ enum Pending {
     NewItem,
     Settings,
     Generator,
+    Transfer,
 }
 
 struct AccountState {
@@ -147,6 +153,7 @@ pub struct State {
     system_scheme: slint::language::ColorScheme,
     desktop: Integration,
     generator: Generator,
+    transfer: Transfer,
 }
 
 type Shared = Rc<RefCell<State>>;
@@ -384,6 +391,7 @@ impl App {
             system_scheme,
             desktop: Integration::new(),
             generator,
+            transfer: Transfer::default(),
         }));
         CONTEXT.with(|c| *c.borrow_mut() = Some((window.as_weak(), state.clone())));
         window.set_rows(ModelRc::from(state.borrow().rows_model.clone()));
@@ -397,6 +405,7 @@ impl App {
         wire(&app.window, &state);
         wire_settings(&app.window, &state);
         wire_generator(&app.window, &state);
+        wire_transfer(&app.window, &state);
         apply_prefs(&app.window, &state);
         refresh_tree(&app.window, &state);
         let first = state

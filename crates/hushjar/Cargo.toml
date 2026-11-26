@@ -12,6 +12,7 @@ getrandom = "0.4"
 hushjar-agent = { version = "0.1.0", path = "../hushjar-agent" }
 hushjar-core.workspace = true
 png = { version = "0.18", optional = true }
+rfd = "0.18"
 serde_json = "1.0.154"
 slint.workspace = true
 zeroize = "1.9.2"

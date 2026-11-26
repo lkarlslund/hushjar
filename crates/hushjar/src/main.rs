@@ -5,6 +5,7 @@ slint::include_modules!();
 
 mod app;
 mod clipboard;
+mod exchange;
 #[cfg(test)]
 mod mock;
 mod model;
