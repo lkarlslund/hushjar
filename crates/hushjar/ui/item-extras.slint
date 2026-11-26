@@ -194,7 +194,8 @@ export component ItemMenu inherits Rectangle {
                                 source: Icons.check;
                                 width: 14px;
                                 height: 14px;
-                                tint: entry.checked ? Theme.honey-text : transparent;
+                                tint: Theme.honey-text;
+                                opacity: entry.checked ? 1 : 0;
                             }
                         }
                     }
