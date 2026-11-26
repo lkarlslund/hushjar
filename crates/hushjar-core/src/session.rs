@@ -63,6 +63,10 @@ pub enum SessionError {
     NotFound,
     #[error("the file is larger than the 500 MiB Bitwarden allows")]
     FileTooLarge,
+    #[error("this server does not support archiving")]
+    ArchiveUnsupported,
+    #[error("{0}")]
+    Invalid(String),
 }
 
 impl From<ApiError> for SessionError {
@@ -139,6 +143,36 @@ fn cache_key(user: &crypto::SymmetricKey, profile: &Profile) -> Zeroizing<[u8; 3
 
 fn cache_aad(profile: &Profile) -> Vec<u8> {
     format!("hushjar-cache-v1|{}|{}", profile.id, profile.user_id).into_bytes()
+}
+
+/// The folders to rename, as (id, new name), when `old_prefix` becomes
+/// `new_prefix`: the folder with that exact name and those below it.
+fn folder_renames(
+    folders: &[vault::Folder],
+    old_prefix: &str,
+    new_prefix: &str,
+) -> Vec<(String, String)> {
+    let below = format!("{old_prefix}/");
+    folders
+        .iter()
+        .filter_map(|f| {
+            if f.name == old_prefix {
+                Some((f.id.clone(), new_prefix.to_string()))
+            } else {
+                f.name
+                    .strip_prefix(&below)
+                    .map(|rest| (f.id.clone(), format!("{new_prefix}/{rest}")))
+            }
+        })
+        .collect()
+}
+
+/// A missing archive endpoint means the server cannot archive.
+fn archive_error(error: SessionError) -> SessionError {
+    match error {
+        SessionError::Api(ApiError::NotFound) => SessionError::ArchiveUnsupported,
+        other => other,
+    }
 }
 
 impl Session {
@@ -635,6 +669,155 @@ impl Session {
         Ok(id)
     }
 
+    /// Renames a folder. Slashes in the name nest it, as in the clients.
+    pub fn rename_folder(
+        &mut self,
+        store: &Store,
+        id: &str,
+        name: &str,
+    ) -> Result<(), SessionError> {
+        let encrypted = self.keys.user.encrypt_str(name);
+        self.with_token(|c, t| c.rename_folder(t, id, &encrypted))?;
+        self.sync(store)
+    }
+
+    /// Renames a folder and every folder nested under it: all whose name is
+    /// `old_prefix` or starts with `old_prefix/` now start with `new_prefix`.
+    /// Returns how many were renamed. Stops at the first failure; folders
+    /// already renamed stay renamed.
+    pub fn rename_folder_tree(
+        &mut self,
+        store: &Store,
+        old_prefix: &str,
+        new_prefix: &str,
+    ) -> Result<usize, SessionError> {
+        let renames = folder_renames(&self.vault.folders, old_prefix, new_prefix);
+        let mut done = 0;
+        for (id, name) in &renames {
+            let encrypted = self.keys.user.encrypt_str(name);
+            self.with_token(|c, t| c.rename_folder(t, id, &encrypted))?;
+            done += 1;
+        }
+        self.sync(store)?;
+        Ok(done)
+    }
+
+    /// Deletes a folder. The server keeps its items and leaves them without
+    /// a folder (verified against Vaultwarden 1.37.3, whose folder deletion
+    /// removes only the folder links). Nested folders are separate folders
+    /// and are not deleted.
+    pub fn delete_folder(&mut self, store: &Store, id: &str) -> Result<(), SessionError> {
+        self.with_token(|c, t| c.delete_folder(t, id))?;
+        self.sync(store)
+    }
+
+    /// Archives an item.
+    pub fn archive(&mut self, store: &Store, id: &str) -> Result<(), SessionError> {
+        self.with_token(|c, t| c.archive_cipher(t, id))
+            .map_err(archive_error)?;
+        self.sync(store)
+    }
+
+    /// Takes an item out of the archive.
+    pub fn unarchive(&mut self, store: &Store, id: &str) -> Result<(), SessionError> {
+        self.with_token(|c, t| c.unarchive_cipher(t, id))
+            .map_err(archive_error)?;
+        self.sync(store)
+    }
+
+    /// Removes one passkey from a login and saves it; the others are kept
+    /// byte for byte. See [`vault::remove_passkey`].
+    pub fn remove_passkey(
+        &mut self,
+        store: &Store,
+        item_id: &str,
+        credential_id: &str,
+    ) -> Result<Item, SessionError> {
+        let mut item = self
+            .vault
+            .item(item_id)
+            .ok_or(SessionError::NotFound)?
+            .clone();
+        if !vault::remove_passkey(&mut item, credential_id) {
+            return Err(SessionError::NotFound);
+        }
+        self.save(store, &item)
+    }
+
+    /// Moves a personal item into an organisation and its collections,
+    /// encrypting it for the organisation (see [`vault::share_body`]).
+    pub fn move_to_organization(
+        &mut self,
+        store: &Store,
+        item_id: &str,
+        organization_id: &str,
+        collection_ids: &[String],
+    ) -> Result<Item, SessionError> {
+        let item = self.vault.item(item_id).ok_or(SessionError::NotFound)?;
+        if !item.editable {
+            return Err(SessionError::ReadOnly);
+        }
+        if item.organization_id.is_some() {
+            return Err(SessionError::Invalid(
+                "this item already belongs to an organisation; change its collections instead"
+                    .into(),
+            ));
+        }
+        self.check_collections(organization_id, collection_ids)?;
+        let cipher = vault::share_body(item, &self.keys, organization_id)?;
+        let body = json!({ "cipher": cipher, "collectionIds": collection_ids });
+        self.with_token(|c, t| c.share_cipher(t, item_id, &body))?;
+        self.sync(store)?;
+        self.vault
+            .item(item_id)
+            .cloned()
+            .ok_or(SessionError::NotFound)
+    }
+
+    /// Changes which collections an organisation item is in.
+    pub fn set_collections(
+        &mut self,
+        store: &Store,
+        item_id: &str,
+        collection_ids: &[String],
+    ) -> Result<Item, SessionError> {
+        let item = self.vault.item(item_id).ok_or(SessionError::NotFound)?;
+        let Some(organization) = item.organization_id.clone() else {
+            return Err(SessionError::Invalid(
+                "this item is personal; move it to an organisation first".into(),
+            ));
+        };
+        self.check_collections(&organization, collection_ids)?;
+        self.with_token(|c, t| c.set_cipher_collections(t, item_id, collection_ids))?;
+        self.sync(store)?;
+        self.vault
+            .item(item_id)
+            .cloned()
+            .ok_or(SessionError::NotFound)
+    }
+
+    /// Checks that there is at least one collection and that all of them
+    /// are in the organisation, before asking the server.
+    fn check_collections(&self, organization: &str, ids: &[String]) -> Result<(), SessionError> {
+        if ids.is_empty() {
+            return Err(SessionError::Invalid(
+                "choose at least one collection".into(),
+            ));
+        }
+        let known = |id: &String| {
+            self.vault
+                .collections
+                .iter()
+                .any(|c| &c.id == id && c.organization_id == organization)
+        };
+        if !ids.iter().all(known) {
+            return Err(SessionError::Invalid(
+                "a chosen collection is not in this organisation; sync and try again".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Downloads an attachment and decrypts it.
     ///
     /// The server is asked for a fresh download address (it expires), which
@@ -923,5 +1106,46 @@ impl Session {
         }
         self.vault.sends.retain(|s| s.id != id);
         self.persist(store)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_folders_follow_a_rename() {
+        let folder = |id: &str, name: &str| vault::Folder {
+            id: id.into(),
+            name: name.into(),
+        };
+        let folders = [
+            folder("1", "Work"),
+            folder("2", "Work/Clients"),
+            folder("3", "Work/Clients/Acme"),
+            folder("4", "Workshop"),
+            folder("5", "Home/Work"),
+        ];
+        let renames = folder_renames(&folders, "Work", "Jobs/Old");
+        assert_eq!(
+            renames,
+            [
+                ("1".to_string(), "Jobs/Old".to_string()),
+                ("2".to_string(), "Jobs/Old/Clients".to_string()),
+                ("3".to_string(), "Jobs/Old/Clients/Acme".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_missing_archive_endpoint_reads_as_unsupported() {
+        assert!(matches!(
+            archive_error(SessionError::Api(ApiError::NotFound)),
+            SessionError::ArchiveUnsupported
+        ));
+        assert!(matches!(
+            archive_error(SessionError::ReadOnly),
+            SessionError::ReadOnly
+        ));
     }
 }
