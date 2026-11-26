@@ -10,6 +10,8 @@ export struct AccountSecurity {
     initials: string,
     unlocked: bool,
     pin: bool,
+    // The PIN is kept only until Hushjar quits.
+    pin-in-memory: bool,
     system-auth: bool,
 }
 
@@ -27,6 +29,9 @@ export global SettingsData {
     in-out property <bool> close-to-tray;
     in-out property <bool> start-in-tray;
     in-out property <bool> start-on-login;
+    // For the next PIN set: keep it in memory only, so the master password
+    // is needed after a restart.
+    in-out property <bool> pin-ask-after-restart;
 
     in property <[string]> lock-after-options;
     in property <[string]> clear-after-options;
@@ -74,7 +79,9 @@ component AccountRow inherits VerticalLayout {
     }
     Row {
         label: "Unlock with a PIN";
-        hint: root.account.pin ? "A PIN is set. Five wrong tries remove it." : "";
+        hint: !root.account.pin ? ""
+            : root.account.pin-in-memory ? "A PIN is set until Hushjar quits; then the master password is needed once. Five wrong tries remove it."
+            : "A PIN is set. Five wrong tries remove it.";
         if root.account.pin: ActionButton {
             text: "Remove PIN";
             enabled: root.account.unlocked;
@@ -105,6 +112,14 @@ component AccountRow inherits VerticalLayout {
                 SettingsData.set-pin(root.index, pin.text);
                 root.entering = false;
             }
+        }
+    }
+    if root.entering: Row {
+        label: "Ask for the master password after a restart";
+        hint: "Keeps the PIN only while Hushjar runs.";
+        Toggle {
+            checked: SettingsData.pin-ask-after-restart;
+            toggled => { SettingsData.pin-ask-after-restart = self.checked; }
         }
     }
     Row {

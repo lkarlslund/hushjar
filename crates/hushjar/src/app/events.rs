@@ -6,6 +6,10 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
     let Some(index) = st.borrow().account_index(id) else {
         return;
     };
+    if sign_in_takes(st, id, &event) {
+        return handle_sign_in_event(win, st, event);
+    }
+    let synced = matches!(event, Event::Synced { .. });
     match event {
         Event::Unlocked { vault, synced_at } | Event::Synced { vault, synced_at } => {
             let first_unlock;
@@ -38,6 +42,9 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
                 render(win, st);
             }
             update_sync_text(win, st);
+            if synced {
+                check_login_requests(st, index);
+            }
         }
         Event::NeedsSignIn { two_factor } => {
             {
@@ -181,93 +188,20 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
                 None => show_sign_in(win, st),
             }
         }
-        Event::SignedIn { .. } | Event::TwoFactorRequired { .. } | Event::EmailSent => {}
-    }
-}
-
-pub(super) fn handle_sign_in_event(win: &AppWindow, st: &Shared, event: Event) {
-    match event {
-        Event::SignedIn {
-            profile,
-            vault,
-            synced_at,
-        } => {
-            let profile = *profile;
-            let key = profile.id.clone();
-            let email = profile.email.clone();
-            {
-                let mut state = st.borrow_mut();
-                // The worker that signed in keeps the session and becomes
-                // this account's worker; it now reports under the account's ID.
-                let Some(worker) = state.sign_in.worker.take() else {
-                    return;
-                };
-                state.sign_in = SignIn::default();
-                if let Some(existing) = state.account_index(&key) {
-                    state.accounts.remove(existing);
-                }
-                let view = Account::from_vault(&profile, &vault);
-                state.accounts.push(AccountState {
-                    profile,
-                    view,
-                    vault: Some(vault),
-                    worker,
-                    busy: false,
-                    needs_sign_in: false,
-                    two_factor: vec![],
-                    synced_at,
-                    note: String::new(),
-                    unlock: UnlockOptions::default(),
-                });
-                state.expanded.insert(key.clone());
-            }
-            refresh_tree(win, st);
-            select(win, st, &key);
-            update_sync_text(win, st);
-            toast(win, st, &format!("Signed in as {email}"));
-        }
-        Event::TwoFactorRequired { providers } => {
-            {
-                let mut state = st.borrow_mut();
-                let si = &mut state.sign_in;
-                si.busy = false;
-                let supported: Vec<_> = providers
-                    .into_iter()
-                    .filter(|p| {
-                        p.supported()
-                            && !matches!(
-                                p,
-                                TwoFactorProvider::YubiKey | TwoFactorProvider::WebAuthn
-                            )
-                    })
-                    .collect();
-                if si.stage == 1 {
-                    si.error = "That code was not accepted".into();
-                } else if supported.is_empty() {
-                    si.error =
-                        "This account uses a two-step login method Hushjar does not support yet"
-                            .into();
-                } else {
-                    si.stage = 1;
-                    si.error.clear();
-                }
-                if !supported.is_empty() {
-                    si.providers = supported;
-                }
-            }
-            render_sign_in(win, st);
-        }
-        Event::EmailSent => {
-            toast(win, st, "A code is on its way to your email");
-        }
-        Event::Failed { message } => {
-            {
-                let mut state = st.borrow_mut();
-                state.sign_in.busy = false;
-                state.sign_in.error = message;
-            }
-            render_sign_in(win, st);
-        }
-        _ => {}
+        Event::UnlockNeedsSignIn {
+            challenge,
+            password,
+        } => continue_unlock_on_form(win, st, index, challenge, password),
+        Event::LoginRequests { requests } => login_requests_event(win, st, index, requests),
+        Event::LoginRequestAnswered { approved } => login_answered_event(win, st, approved),
+        Event::AccountFingerprint { phrase } => fingerprint_event(win, st, index, phrase),
+        Event::PinState { stored, held } => pin_state_event(win, st, index, stored, held),
+        Event::SignedIn { .. }
+        | Event::TwoFactorRequired { .. }
+        | Event::EmailSent
+        | Event::NewDeviceRequired
+        | Event::DeviceLoginStarted { .. }
+        | Event::DeviceLoginWaiting
+        | Event::DeviceLoginEnded { .. } => {}
     }
 }

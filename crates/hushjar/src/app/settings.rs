@@ -76,6 +76,7 @@ pub(super) fn render_settings(win: &AppWindow, st: &Shared) {
             initials: s(&a.view.initials),
             unlocked: a.vault.is_some(),
             pin: a.unlock.pin,
+            pin_in_memory: a.unlock.pin_in_memory,
             system_auth: a.unlock.system_auth,
         })
         .collect();
@@ -196,14 +197,6 @@ pub(super) fn wire_settings(w: &AppWindow, state: &Shared) {
         set_system_auth(&win, st, index as usize, on);
         render_settings(&win, st);
     });
-}
-
-fn set_pin(win: &AppWindow, st: &Shared, _account: usize, _pin: &str) {
-    toast(win, st, "PIN unlock is not connected yet");
-}
-
-fn remove_pin(win: &AppWindow, st: &Shared, _account: usize) {
-    toast(win, st, "PIN unlock is not connected yet");
 }
 
 fn set_system_auth(win: &AppWindow, st: &Shared, _account: usize, _on: bool) {

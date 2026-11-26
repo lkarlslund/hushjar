@@ -5,23 +5,26 @@
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use hushjar_core::api::{SecondFactor, Server, TwoFactorProvider};
+use hushjar_core::api::{
+    AuthRequest, Device, SecondFactor, Server, TwoFactorChallenge, TwoFactorProvider,
+};
 use hushjar_core::session::{Session, SessionError};
 use hushjar_core::store::{Profile, Store};
 use hushjar_core::vault::{Item, Vault};
 use zeroize::Zeroizing;
 
+mod login;
+
+pub use login::{Second, SignInRequest};
+
 pub enum Command {
-    SignIn {
-        server: Server,
-        email: String,
-        password: Zeroizing<String>,
-        second: Option<(TwoFactorProvider, String, bool)>,
-    },
+    SignIn(Box<SignInRequest>),
     SendEmailCode {
         server: Server,
         email: String,
         password: Zeroizing<String>,
+        /// The device signing in, so the code is asked for as that device.
+        device: Option<Device>,
     },
     Unlock {
         password: Zeroizing<String>,
@@ -40,6 +43,39 @@ pub enum Command {
     /// Locks and forgets the session and offline copy.
     LogOut,
     Remove,
+    /// Asks Bitwarden to email another new-device code; `second` is unused.
+    ResendNewDeviceCode(Box<SignInRequest>),
+    /// Starts logging in with another device.
+    StartDeviceLogin {
+        server: Server,
+        email: String,
+        device: Option<Device>,
+    },
+    /// Checks once whether the login request was answered.
+    PollDeviceLogin,
+    /// Finishes an approved device login that needs two-step login.
+    FinishDeviceLogin {
+        server: Server,
+        second: Option<Second>,
+    },
+    CancelDeviceLogin,
+    /// Fetches other devices' login requests for this unlocked account.
+    CheckLoginRequests,
+    AnswerLoginRequest {
+        request: Box<AuthRequest>,
+        approve: bool,
+    },
+    /// Sets a PIN; without `persist` it is kept in memory only.
+    SetPin {
+        pin: Zeroizing<String>,
+        persist: bool,
+    },
+    RemovePin,
+    UnlockWithPin {
+        pin: Zeroizing<String>,
+    },
+    /// Reports the account's fingerprint phrase.
+    AccountFingerprint,
 }
 
 /// What happened, for the UI. `vault` copies are the decrypted state after
@@ -51,7 +87,7 @@ pub enum Event {
         synced_at: Option<u64>,
     },
     TwoFactorRequired {
-        providers: Vec<TwoFactorProvider>,
+        challenge: Box<TwoFactorChallenge>,
     },
     EmailSent,
     Unlocked {
@@ -83,6 +119,40 @@ pub enum Event {
     },
     Locked,
     Removed,
+    /// Sign in again with the code Bitwarden emailed to confirm this device.
+    NewDeviceRequired,
+    /// Unlocking a logged-out account signed in online and needs two-step
+    /// login (`challenge`) or a new-device code (`None`): continue on the
+    /// sign-in form with the same password.
+    UnlockNeedsSignIn {
+        challenge: Option<Box<TwoFactorChallenge>>,
+        password: Zeroizing<String>,
+    },
+    /// A login request went out; show `phrase` to compare.
+    DeviceLoginStarted {
+        phrase: String,
+    },
+    /// The login request is still waiting for an answer.
+    DeviceLoginWaiting,
+    /// The login request was denied or expired.
+    DeviceLoginEnded {
+        message: String,
+    },
+    /// Other devices' pending login requests with their fingerprint phrases.
+    LoginRequests {
+        requests: Vec<(String, AuthRequest)>,
+    },
+    LoginRequestAnswered {
+        approved: bool,
+    },
+    /// Whether PIN unlock is set up: stored on disk, or held in memory.
+    PinState {
+        stored: bool,
+        held: bool,
+    },
+    AccountFingerprint {
+        phrase: String,
+    },
 }
 
 pub struct Worker {
@@ -127,6 +197,10 @@ fn run(
     emit_to: impl Fn(String, Event),
 ) {
     let mut session: Option<Session> = None;
+    let mut kept = login::Kept::default();
+    if let Some(p) = &profile {
+        emit_to(p.id.clone(), login::pin_state(&store, p, &kept));
+    }
 
     // Brings an unlocked session online, signing in again with the password
     // when the stored tokens no longer work.
@@ -166,47 +240,19 @@ fn run(
         let id = profile.as_ref().map(|p| p.id.clone()).unwrap_or_default();
         let emit = |event: Event| emit_to(id.clone(), event);
         match command {
-            Command::SignIn {
-                server,
-                email,
-                password,
-                second,
-            } => {
-                match Session::sign_in(
-                    &store,
-                    server,
-                    &email,
-                    &password,
-                    second_factor(&second),
-                    profile.as_ref(),
-                ) {
-                    Ok(s) => {
-                        profile = Some(s.profile.clone());
-                        emit(Event::SignedIn {
-                            profile: Box::new(s.profile.clone()),
-                            vault: s.vault.clone(),
-                            synced_at: s.synced_at,
-                        });
-                        session = Some(s);
-                    }
-                    Err(SessionError::TwoFactorRequired(challenge)) => {
-                        emit(Event::TwoFactorRequired {
-                            providers: challenge.providers,
-                        })
-                    }
-                    Err(e) => emit(Event::Failed {
-                        message: describe(&e),
-                    }),
-                }
+            Command::SignIn(request) => {
+                login::sign_in(&store, *request, &mut profile, &mut session, &emit)
             }
             Command::SendEmailCode {
                 server,
                 email,
                 password,
+                device,
             } => {
                 let device = profile
                     .as_ref()
                     .map(|p| p.device.clone())
+                    .or(device)
                     .unwrap_or_default();
                 match Session::send_email_code(&server, &email, &password, &device) {
                     Ok(()) => emit(Event::EmailSent),
@@ -242,9 +288,7 @@ fn run(
                                 });
                                 session = Some(s);
                             }
-                            Err(e) => emit(Event::Failed {
-                                message: describe(&e),
-                            }),
+                            Err(e) => emit(login::unlock_sign_in_failed(e, &password)),
                         }
                     }
                     Err(e) => emit(Event::Failed {
@@ -335,6 +379,58 @@ fn run(
                 emit(Event::Removed);
                 return;
             }
+            Command::ResendNewDeviceCode(request) => {
+                login::resend_new_device_code(&request, profile.as_ref(), &emit)
+            }
+            Command::StartDeviceLogin {
+                server,
+                email,
+                device,
+            } => login::start_device_login(
+                server,
+                &email,
+                device,
+                profile.as_ref(),
+                &mut kept,
+                &emit,
+            ),
+            Command::PollDeviceLogin => {
+                login::poll_device_login(&store, &mut kept, &mut profile, &mut session, &emit)
+            }
+            Command::FinishDeviceLogin { server, second } => login::finish_device_login(
+                &store,
+                &server,
+                second,
+                &mut kept,
+                &mut profile,
+                &mut session,
+                &emit,
+            ),
+            Command::CancelDeviceLogin => login::cancel_device_login(&mut kept),
+            Command::CheckLoginRequests => login::check_login_requests(session.as_mut(), &emit),
+            Command::AnswerLoginRequest { request, approve } => {
+                login::answer_login_request(session.as_mut(), &request, approve, &emit)
+            }
+            Command::SetPin { pin, persist } => {
+                login::set_pin(&store, session.as_ref(), &pin, persist, &mut kept, &emit)
+            }
+            Command::RemovePin => {
+                if let Some(p) = &profile {
+                    login::remove_pin(&store, p, &mut kept, &emit);
+                }
+            }
+            Command::UnlockWithPin { pin } => {
+                let Some(p) = profile.clone() else { continue };
+                if let Some(mut s) = login::unlock_with_pin(&store, &p, &pin, &mut kept, &emit) {
+                    emit(Event::Unlocked {
+                        vault: s.vault.clone(),
+                        synced_at: s.synced_at,
+                    });
+                    go_online(&mut s, None, &emit);
+                    session = Some(s);
+                }
+            }
+            Command::AccountFingerprint => login::account_fingerprint(session.as_ref(), &emit),
         }
     }
 }
