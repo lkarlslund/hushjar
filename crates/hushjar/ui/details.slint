@@ -403,6 +403,14 @@ export component DetailsPane inherits Rectangle {
             busy: root.busy;
             focus-request: root.unlock-focus-request;
         }
+        if UnlockData.system-auth-available: HorizontalLayout {
+            alignment: center;
+            ActionButton {
+                text: "Unlock with system authentication";
+                enabled: !root.busy;
+                clicked => { UnlockData.unlock-with-system(); }
+            }
+        }
         if root.unlock-error != "": Text {
             text: root.unlock-error;
             horizontal-alignment: center;

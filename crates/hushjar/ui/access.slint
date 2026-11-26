@@ -22,7 +22,10 @@ export global SignInData {
 export global UnlockData {
     in property <bool> pin-available;
     in-out property <bool> use-password;
+    // A key is kept and the system can confirm the user.
+    in property <bool> system-auth-available;
     callback unlock-with-pin(string);
+    callback unlock-with-system();
 }
 
 // The account pane's fingerprint phrase.

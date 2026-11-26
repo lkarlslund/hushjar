@@ -91,6 +91,10 @@ pub enum Command {
     },
     /// Reports the account's fingerprint phrase.
     AccountFingerprint,
+    /// Hands the user key to the app, for unlocking with system authentication.
+    ExportUserKey,
+    /// Unlocks with a user key the app kept (system authentication).
+    UnlockWithUserKey(Zeroizing<Vec<u8>>),
     /// Checks the master password, for actions that ask for it again.
     VerifyPassword {
         password: Zeroizing<String>,
@@ -210,6 +214,8 @@ pub enum Event {
         held: bool,
         offline_copy: Option<bool>,
     },
+    /// The account's user key, for system authentication.
+    UserKey(Zeroizing<Vec<u8>>),
     AccountFingerprint {
         phrase: String,
     },
@@ -706,6 +712,29 @@ fn run(
                 }
             }
             Command::AccountFingerprint => login::account_fingerprint(session.as_ref(), &emit),
+            Command::ExportUserKey => {
+                if let Some(s) = &session {
+                    emit(Event::UserKey(s.export_user_key()));
+                }
+            }
+            Command::UnlockWithUserKey(key) => {
+                let Some(p) = profile.clone() else { continue };
+                match Session::unlock_with_user_key(&store, &p, &key) {
+                    Ok(mut s) => {
+                        live.stop();
+                        emit(Event::Policies(Box::new(s.policies())));
+                        emit(Event::Unlocked {
+                            vault: s.vault.clone(),
+                            synced_at: s.synced_at,
+                        });
+                        go_online(&mut s, None, &emit);
+                        session = Some(s);
+                    }
+                    Err(e) => emit(Event::Failed {
+                        message: describe(&e),
+                    }),
+                }
+            }
             Command::Token(reply) => {
                 let token = session.as_mut().and_then(|s| s.access_token().ok());
                 let _ = reply.send(token);

@@ -33,6 +33,7 @@ mod sends;
 mod settings;
 mod sign_in;
 mod ssh;
+mod sysunlock;
 mod transfer;
 mod unlock;
 mod view;
@@ -185,6 +186,10 @@ pub struct State {
     prompts: VecDeque<Prompt>,
     /// Per SSH key ("account/item"): offered to the agent, and when to ask.
     ssh_settings: HashMap<String, (bool, AskMode)>,
+    /// User keys kept for unlocking with system authentication.
+    key_holder: Arc<crate::desktop::sysauth::KeyHolder>,
+    /// Accounts that unlock with system authentication.
+    system_auth: HashSet<String>,
     prefs: Prefs,
     /// Whether a light or dark theme was forced on the window.
     scheme_forced: bool,
@@ -403,6 +408,10 @@ impl App {
             None => Err("the SSH agent is not available on this system yet".into()),
         };
         let ssh_settings = load_ssh_settings(&store);
+        let system_auth = sysunlock::load_enabled(&store);
+        for a in &mut accounts {
+            a.unlock.system_auth = system_auth.contains(&a.profile.id);
+        }
         let prefs = Prefs::from_settings(&store.read_settings());
         let generator = Generator::from_settings(&store.read_settings());
         let state: Shared = Rc::new(RefCell::new(State {
@@ -428,6 +437,8 @@ impl App {
             agent,
             prompts: VecDeque::new(),
             ssh_settings,
+            key_holder: sysunlock::new_holder(),
+            system_auth,
             prefs,
             scheme_forced: false,
             desktop: Integration::new(),
@@ -447,6 +458,7 @@ impl App {
         };
         wire(&app.window, &state);
         wire_settings(&app.window, &state);
+        sysunlock::wire(&app.window, &state);
         wire_generator(&app.window, &state);
         wire_access(&app.window, &state);
         wire_transfer(&app.window, &state);
@@ -613,6 +625,15 @@ fn leave_to(win: &AppWindow, st: &Shared, then: Pending) -> bool {
 fn time_out_all(win: &AppWindow, st: &Shared) {
     let log_out = st.borrow().timeout_action() == LockAction::LogOut;
     if log_out {
+        let ids: Vec<String> = st
+            .borrow()
+            .accounts
+            .iter()
+            .map(|a| a.profile.id.clone())
+            .collect();
+        for id in ids {
+            sysunlock::forget(st, &id);
+        }
         let s = st.borrow();
         for a in &s.accounts {
             if a.vault.is_some() {

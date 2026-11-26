@@ -16,6 +16,7 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
     match event {
         Event::SendSaved { send, vault, link } => sends::saved(win, st, index, *send, vault, link),
         Event::Unlocked { vault, synced_at } | Event::Synced { vault, synced_at } => {
+            sysunlock::after_unlock(st, index);
             let first_unlock;
             {
                 let mut state = st.borrow_mut();
@@ -153,6 +154,7 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
         }
         Event::Locked => locked(win, st, index),
         Event::LoggedOutByServer => {
+            sysunlock::forget(st, id);
             {
                 let mut state = st.borrow_mut();
                 state.accounts[index].note =
@@ -183,7 +185,9 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
                 render(win, st);
             }
         }
+        Event::UserKey(key) => sysunlock::key_arrived(st, index, key),
         Event::Removed => {
+            sysunlock::forget(st, id);
             {
                 let mut state = st.borrow_mut();
                 let email = state.accounts[index].profile.email.clone();

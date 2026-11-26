@@ -33,6 +33,8 @@ pub(super) fn render_unlock(win: &AppWindow, st: &Shared, account: usize) {
         data.set_use_password(false);
         state.access.locked_shown = Some(id);
     }
+    drop(state);
+    sysunlock::render(win, st, account);
 }
 
 fn unlock_with_pin(win: &AppWindow, st: &Shared, pin: &str) {

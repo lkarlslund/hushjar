@@ -201,13 +201,9 @@ pub(super) fn wire_settings(w: &AppWindow, state: &Shared) {
         remove_pin(&win, st, index as usize);
     });
     on!(on_system_auth, |win, st, index: i32, on: bool| {
-        set_system_auth(&win, st, index as usize, on);
+        sysunlock::set_system_auth(&win, st, index as usize, on);
         render_settings(&win, st);
     });
-}
-
-fn set_system_auth(win: &AppWindow, st: &Shared, _account: usize, _on: bool) {
-    toast(win, st, "System authentication is not connected yet");
 }
 
 /// The desktop's light or dark preference, as the window system reports it.
