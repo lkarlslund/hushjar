@@ -12,6 +12,7 @@ use crate::api::{
     ApiError, Client, Device, SecondFactor, Server, TwoFactorProvider, field, field_str,
 };
 use crate::crypto::{self, CryptoError, HashPurpose, PrivateKey};
+use crate::policy::Policies;
 use crate::store::{Profile, Store};
 use crate::vault::{self, Item, Keys, Vault, VaultError};
 
@@ -303,6 +304,18 @@ impl Session {
             }
             Err(other) => Err(other.into()),
         }
+    }
+
+    /// A current access token, refreshed first when it is about to expire;
+    /// for connections the session does not make itself, such as the
+    /// notification [`Listener`](crate::notifications::Listener).
+    pub fn access_token(&mut self) -> Result<Zeroizing<String>, SessionError> {
+        self.token()
+    }
+
+    /// The organisation policies that apply to this user, from the last sync.
+    pub fn policies(&self) -> Policies {
+        Policies::from_sync(&self.sync)
     }
 
     /// Runs an authenticated request, retrying once with a fresh token if the
