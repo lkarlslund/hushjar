@@ -268,6 +268,8 @@ pub struct Item {
     pub favorite: bool,
     pub deleted: bool,
     pub archived: bool,
+    /// Ask for the master password before showing or copying secrets.
+    pub reprompt: bool,
     pub editable: bool,
     pub sections: Vec<Section>,
     pub created: String,
@@ -287,6 +289,7 @@ impl Item {
             favorite: false,
             deleted: false,
             archived: false,
+            reprompt: false,
             editable: true,
             sections: vec![],
             created: String::new(),
@@ -606,6 +609,7 @@ pub fn from_core(item: &core::Item) -> Item {
         favorite: item.favorite,
         deleted: item.deleted,
         archived: item.archived,
+        reprompt: item.reprompt,
         editable: item.editable && item.kind.editable() && item.unreadable == 0,
         sections,
         created: format_time(&item.created),
@@ -620,6 +624,7 @@ pub fn apply(display: &Item, original: &core::Item) -> core::Item {
     item.name = display.name.clone();
     item.folder_id = display.folder.clone();
     item.favorite = display.favorite;
+    item.reprompt = display.reprompt;
     let mut uris = Vec::new();
     let mut custom = Vec::new();
     for field in display
