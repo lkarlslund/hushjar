@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "file": "stretch.json",
+  "sha256": "c09ab882f7ff2dbe7b6e5946310081873264f911ad1885c174111bb17213b30a",
+  "origin": "https://github.com/bitwarden/sdk-internal/blob/6ad7094edb4f2d391c6468f1fdfe8ac474a3c7e1/crates/bitwarden-crypto/src/keys/utils.rs",
+  "upstream_commit": "6ad7094edb4f2d391c6468f1fdfe8ac474a3c7e1",
+  "license": "Factual cryptographic vector transcribed from Bitwarden SDK; upstream crate license GPL-3.0-only OR LicenseRef-Bitwarden-SDK. Additional derived values are factual outputs. No implementation copied.",
+  "generation": "Transcribe test_stretch_kdf_key master input and enc/mac output byte arrays. Concatenate enc then mac and encode as lowercase hex. No VaultGoblin-generated expectations."
+}

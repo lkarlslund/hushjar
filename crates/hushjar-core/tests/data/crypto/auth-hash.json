@@ -1,0 +1,14 @@
+[
+  {
+    "master_hex": "8fa2c8c4233b33854aa1bca4ca725ccd12abde38b7482720def4eea018049268",
+    "password": "asdfasdf",
+    "purpose": 1,
+    "hash": "wmyadRMyBZOH7P/a/ucTCbSghKgdzDpPqUnu/DAVtSw="
+  },
+  {
+    "master_hex": "8fa2c8c4233b33854aa1bca4ca725ccd12abde38b7482720def4eea018049268",
+    "password": "asdfasdf",
+    "purpose": 2,
+    "hash": "npf6w9mFGiNJZkg6QdWsiqZr94+ClKDTzF/B3XW4XV4="
+  }
+]

@@ -1,0 +1,34 @@
+[
+  {
+    "email": "test_key",
+    "password": "67t9b5g67$%Dh89n",
+    "iterations": 4,
+    "memory_mib": 32,
+    "parallelism": 2,
+    "key_hex": "cff0e1b1a213a34c626ab3afe00911f01493ed2ff6968db83ee183f23335e1f2"
+  },
+  {
+    "email": "test_key",
+    "password": "synthetic\u0000 password ",
+    "iterations": 2,
+    "memory_mib": 16,
+    "parallelism": 1,
+    "key_hex": "6e6a7127f01671457f59a971764627fa0aff2b0804fdf987c02a6c1ae0cb3d0c"
+  },
+  {
+    "email": "test_key",
+    "password": "synthetic\u0000 password ",
+    "iterations": 6,
+    "memory_mib": 32,
+    "parallelism": 4,
+    "key_hex": "ee29bba5da9c7f24107bf4290b71f160c07c73df0f22d01bd26e570896c605bd"
+  },
+  {
+    "email": "test_key",
+    "password": "synthetic\u0000 password ",
+    "iterations": 2,
+    "memory_mib": 17,
+    "parallelism": 3,
+    "key_hex": "b36b3d99364f3f4c5a2b596e110e9dd2483b609dfc336b68303cb5bace1511aa"
+  }
+]

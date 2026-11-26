@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "file": "pbkdf2.json",
+  "sha256": "d351829a7c9df32ea7fffd5a03c725c08f872627a52c3c1febebf306ddc913f3",
+  "origin": "https://github.com/bitwarden/sdk-internal/blob/6ad7094edb4f2d391c6468f1fdfe8ac474a3c7e1/crates/bitwarden-crypto/src/keys/kdf.rs",
+  "upstream_commit": "6ad7094edb4f2d391c6468f1fdfe8ac474a3c7e1",
+  "license": "Factual cryptographic vector transcribed from Bitwarden SDK; upstream crate license GPL-3.0-only OR LicenseRef-Bitwarden-SDK. Additional derived values are factual outputs. No implementation copied.",
+  "generation": "Transcribe test_master_key_derive_pbkdf2 inputs and 32 expected bytes from the pinned SDK kdf.rs; encode expected bytes as lowercase hex. Do not regenerate the expected value with VaultGoblin. Additional 5000/600000/2000000-count expected values use independent Python hashlib.pbkdf2_hmac(\"sha256\", password.encode(), email.encode(), iterations, 32).hex() with the same ASCII inputs; they are not upstream literal vectors."
+}

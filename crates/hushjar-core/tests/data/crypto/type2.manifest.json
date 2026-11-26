@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "file": "type2.json",
+  "sha256": "07d63afa9e5d2435d9e736c0d1e4b631fcf55f1fb3460b5ee98213b05ce652e3",
+  "origin": "https://github.com/bitwarden/sdk-internal/blob/6ad7094edb4f2d391c6468f1fdfe8ac474a3c7e1/crates/bitwarden-crypto/src/enc_string/symmetric.rs",
+  "upstream_commit": "6ad7094edb4f2d391c6468f1fdfe8ac474a3c7e1",
+  "license": "Original synthetic fixtures and factual cryptographic outputs; CC0-1.0. No upstream implementation copied.",
+  "generation": "Run generate-type2.py using OpenSSL enc AES-256-CBC -nopad and Python hmac SHA256 over IV || ciphertext. Original deterministic key/IV and synthetic inputs; includes authenticated invalid PKCS7 padding. Format follows pinned SDK symmetric.rs, outputs are independent OpenSSL/Python oracle results, not upstream literal vectors."
+}

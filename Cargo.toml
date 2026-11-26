@@ -20,3 +20,7 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# Key derivation is far too slow unoptimised; optimise dependencies in dev builds.
+[profile.dev.package."*"]
+opt-level = 3

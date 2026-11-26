@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "file": "item-key.json",
+  "sha256": "b91cb17217eae208c373c9c8466ba4aae132f6bb422ca84500cce0536997fa84",
+  "origin": "https://github.com/bitwarden/clients/blob/e40ce6f08ebf963db3561464e77b4defe05247e8/libs/common/src/vault/services/cipher.service.ts",
+  "upstream_commit": "e40ce6f08ebf963db3561464e77b4defe05247e8",
+  "license": "Original synthetic fixtures and factual cryptographic outputs; CC0-1.0. No upstream implementation copied.",
+  "generation": "Run generate-item-key.py with OpenSSL AES-CBC and Python HMAC. Synthetic parent/item keys exercise pinned client cipher.key != null unwrap selection; absent key uses vault key. No Go implementation generates expectations."
+}

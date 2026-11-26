@@ -1,0 +1,26 @@
+[
+  {
+    "email": "test_key",
+    "password": "67t9b5g67$%Dh89n",
+    "iterations": 10000,
+    "key_hex": "1f4f68e29647b15ac250acd1118184518aa745a7fe95021b27c5402a16c3564b"
+  },
+  {
+    "email": "test_key",
+    "password": "67t9b5g67$%Dh89n",
+    "iterations": 5000,
+    "key_hex": "33e871707fc82e0655f73eb6f086bdf03b45cdd3d6c48910c59107e1f59f5f3a"
+  },
+  {
+    "email": "test_key",
+    "password": "67t9b5g67$%Dh89n",
+    "iterations": 600000,
+    "key_hex": "3353d60f84262bd8448bb69af060bab6cb1a30c9f6953a67f1848e46a7f33d25"
+  },
+  {
+    "email": "test_key",
+    "password": "67t9b5g67$%Dh89n",
+    "iterations": 2000000,
+    "key_hex": "7324f303087c824948408dde1df5ce98705b3341687ce99fe2221d71e3488ef3"
+  }
+]

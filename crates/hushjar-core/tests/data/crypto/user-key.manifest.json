@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "file": "user-key.json",
+  "sha256": "540635b16dd45fd15ee4c6d7961f4fa000610a2582f3918c7abe0979f409a7c3",
+  "origin": "https://github.com/bitwarden/sdk-internal/blob/6ad7094edb4f2d391c6468f1fdfe8ac474a3c7e1/crates/bitwarden-crypto/src/keys/master_key.rs",
+  "upstream_commit": "6ad7094edb4f2d391c6468f1fdfe8ac474a3c7e1",
+  "license": "Original synthetic fixtures and factual cryptographic outputs; CC0-1.0. No upstream implementation copied.",
+  "generation": "Run generate-user-key.py: Python HMAC HKDF-Expand enc/mac labels and OpenSSL AES-CBC produce synthetic user-key envelopes following pinned SDK wrapping. Includes authenticated wrong key lengths. Expectations are independent of Go implementation."
+}

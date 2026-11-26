@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "file": "encstring.txt",
+  "sha256": "cf15755a1a8ac58e4adc2bab4a0a96b57f820e7aa9d2a44f007220e5f037fbe9",
+  "origin": "https://github.com/bitwarden/sdk-internal/blob/6ad7094edb4f2d391c6468f1fdfe8ac474a3c7e1/crates/bitwarden-crypto/src/enc_string/symmetric.rs",
+  "upstream_commit": "6ad7094edb4f2d391c6468f1fdfe8ac474a3c7e1",
+  "license": "Factual cryptographic vector transcribed from Bitwarden SDK; upstream crate license GPL-3.0-only OR LicenseRef-Bitwarden-SDK. Additional derived values are factual outputs. No implementation copied.",
+  "generation": "Transcribe the type-2 encrypted-string literal from pinned SDK symmetric.rs serde/from-string tests, with one final LF. This is parser evidence only, not authentication/decryption evidence."
+}
