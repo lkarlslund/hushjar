@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/hushjar", "crates/hushjar-core"]
+members = ["crates/hushjar", "crates/hushjar-agent", "crates/hushjar-core"]
 
 [workspace.package]
 version = "0.1.0"

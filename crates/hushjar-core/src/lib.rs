@@ -2,3 +2,5 @@
 //! server synchronisation. This crate must not depend on any UI toolkit.
 
 #![forbid(unsafe_code)]
+
+pub mod totp;

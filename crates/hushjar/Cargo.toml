@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-getrandom = "0.3"
+getrandom = "0.4"
 hushjar-core.workspace = true
 png = { version = "0.18", optional = true }
 slint.workspace = true
