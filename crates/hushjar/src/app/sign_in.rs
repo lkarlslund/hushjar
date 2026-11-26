@@ -615,6 +615,8 @@ fn signed_in(win: &AppWindow, st: &Shared, profile: Profile, vault: Vault, synce
             synced_at,
             note: String::new(),
             unlock: UnlockOptions::default(),
+            policies: None,
+            live_problem: None,
         });
         state.expanded.insert(key.clone());
     }

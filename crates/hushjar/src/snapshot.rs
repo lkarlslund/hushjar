@@ -75,6 +75,13 @@ const STEPS: &[Step] = &[
     ("06-types", |w| w.invoke_group_by_picked(2), 800),
     ("06b-settings", |w| w.invoke_open_settings(), 800),
     ("06c-generator", |w| w.invoke_open_generator(), 800),
+    ("06d-transfer", |w| w.invoke_open_transfer(), 800),
+    ("06d-sends", |w| w.invoke_open_sends(), 800),
+    (
+        "06e-send-selected",
+        |w| w.global::<crate::SendsData>().invoke_select(0),
+        800,
+    ),
     (
         "07-add-account",
         |w| {

@@ -70,13 +70,15 @@ pub(super) fn render_settings(win: &AppWindow, st: &Shared) {
     let accounts: Vec<AccountSecurity> = state
         .accounts
         .iter()
-        .map(|a| AccountSecurity {
+        .enumerate()
+        .map(|(index, a)| AccountSecurity {
             email: s(&a.profile.email),
             tint: color(a.view.tint),
             initials: s(&a.view.initials),
             unlocked: a.vault.is_some(),
             pin: a.unlock.pin,
             pin_in_memory: a.unlock.pin_in_memory,
+            pin_disabled: pin_disabled(&state, index),
             system_auth: a.unlock.system_auth,
         })
         .collect();
@@ -85,13 +87,10 @@ pub(super) fn render_settings(win: &AppWindow, st: &Shared) {
 
 /// Explains limits that organisation policies put on the timeout.
 fn policy_note(state: &State) -> String {
-    match state.policy_idle_limit() {
-        Some(limit) => format!(
-            "An organisation policy locks accounts after at most {} minutes.",
-            limit.as_secs() / 60
-        ),
-        None => String::new(),
-    }
+    state
+        .policy_idle_limit()
+        .map(timeout_note)
+        .unwrap_or_default()
 }
 
 /// Reads the pane back into the preferences, saves and applies them.
@@ -138,13 +137,21 @@ fn settings_changed(win: &AppWindow, st: &Shared) {
 
 /// Puts the preferences into effect.
 pub(super) fn apply_prefs(win: &AppWindow, st: &Shared) {
-    let state = st.borrow();
-    let scheme = match state.prefs.theme {
-        ThemeChoice::System => state.system_scheme,
-        ThemeChoice::Light => slint::language::ColorScheme::Light,
-        ThemeChoice::Dark => slint::language::ColorScheme::Dark,
+    use slint::language::ColorScheme;
+    let theme = st.borrow().prefs.theme;
+    // "System" leaves the scheme alone unless a forced one has to be undone;
+    // setting it to Unknown would leave the standard widgets unstyled.
+    let scheme = match theme {
+        ThemeChoice::Light => Some(ColorScheme::Light),
+        ThemeChoice::Dark => Some(ColorScheme::Dark),
+        ThemeChoice::System if st.borrow().scheme_forced => Some(system_scheme(win)),
+        ThemeChoice::System => None,
     };
-    win.global::<crate::Palette>().set_color_scheme(scheme);
+    if let Some(scheme) = scheme {
+        win.global::<crate::Palette>().set_color_scheme(scheme);
+    }
+    st.borrow_mut().scheme_forced = theme != ThemeChoice::System;
+    let state = st.borrow();
     state.clipboard.borrow_mut().clear_after = state.prefs.clear_delay();
     let tray = state.prefs.tray;
     drop(state);
@@ -201,4 +208,15 @@ pub(super) fn wire_settings(w: &AppWindow, state: &Shared) {
 
 fn set_system_auth(win: &AppWindow, st: &Shared, _account: usize, _on: bool) {
     toast(win, st, "System authentication is not connected yet");
+}
+
+/// The desktop's light or dark preference, as the window system reports it.
+fn system_scheme(win: &AppWindow) -> slint::language::ColorScheme {
+    use slint::language::ColorScheme;
+    use slint::winit_030::{WinitWindowAccessor, winit::window::Theme};
+    let theme = win.window().with_winit_window(|w| w.theme()).flatten();
+    match theme {
+        Some(Theme::Dark) => ColorScheme::Dark,
+        _ => ColorScheme::Light,
+    }
 }

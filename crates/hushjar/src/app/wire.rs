@@ -264,7 +264,11 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
         }
     });
     on!(on_generate, |win, st, section: i32, field: i32| {
-        let password = match st.borrow().generator.secret() {
+        let secret = {
+            let state = st.borrow();
+            state.generator.secret(state.generator_policy().as_ref())
+        };
+        let password = match secret {
             Ok(p) => p,
             Err(message) => {
                 toast(
@@ -526,6 +530,12 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
     });
     on!(on_open_generator, |win, st| {
         show_generator(&win, st);
+    });
+    on!(on_open_transfer, |win, st| {
+        show_transfer(&win, st);
+    });
+    on!(on_open_sends, |win, st| {
+        show_sends(&win, st);
     });
     on!(on_open_settings, |win, st| {
         show_settings(&win, st);

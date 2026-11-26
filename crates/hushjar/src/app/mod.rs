@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hushjar_core::api::{Device, Server, TwoFactorChallenge, TwoFactorProvider};
+use hushjar_core::policy::Policies;
 use hushjar_core::store::{Profile, Store};
 use hushjar_core::vault::{self as core, Vault};
 use hushjar_core::webauthn::Cancel;
@@ -26,10 +27,13 @@ mod edit;
 mod events;
 mod generator;
 mod integration;
+mod live;
 mod login_requests;
+mod sends;
 mod settings;
 mod sign_in;
 mod ssh;
+mod transfer;
 mod unlock;
 mod view;
 mod wire;
@@ -37,11 +41,16 @@ mod wire;
 use edit::*;
 use events::*;
 use generator::{Generator, render_generator, show_generator, wire_generator};
-use integration::Integration;
+use integration::{Integration, close_requested, sync_prompt_note, update_tray_status};
+use live::*;
 use login_requests::*;
+use sends::{Sends, forget_sends, render_sends, show_sends, wire_sends};
 use settings::*;
 use sign_in::*;
 use ssh::*;
+use transfer::{
+    Transfer, forget_transfer, handle_transfer_event, render_transfer, show_transfer, wire_transfer,
+};
 use unlock::*;
 use view::*;
 use wire::*;
@@ -61,6 +70,8 @@ enum Shown {
     SignIn,
     Settings,
     Generator,
+    Transfer,
+    Sends,
 }
 
 struct Draft {
@@ -85,6 +96,8 @@ enum Pending {
     NewItem,
     Settings,
     Generator,
+    Transfer,
+    Sends,
 }
 
 struct AccountState {
@@ -98,6 +111,10 @@ struct AccountState {
     synced_at: Option<u64>,
     note: String,
     unlock: UnlockOptions,
+    /// What organisations require of this account, from its last sync.
+    policies: Option<Policies>,
+    /// Why live updates keep failing, when they do.
+    live_problem: Option<String>,
 }
 
 /// Ways to unlock an account other than the master password.
@@ -106,6 +123,9 @@ struct UnlockOptions {
     pin: bool,
     /// The PIN is kept only until Hushjar quits.
     pin_in_memory: bool,
+    /// Logged out (by the timeout or the server): there is no offline copy
+    /// for a PIN to open until the master password signs in again.
+    logged_out: bool,
     system_auth: bool,
 }
 
@@ -166,12 +186,14 @@ pub struct State {
     /// Per SSH key ("account/item"): offered to the agent, and when to ask.
     ssh_settings: HashMap<String, (bool, AskMode)>,
     prefs: Prefs,
-    /// The desktop's own colour scheme, for the "System" theme.
-    system_scheme: slint::language::ColorScheme,
+    /// Whether a light or dark theme was forced on the window.
+    scheme_forced: bool,
     desktop: Integration,
     generator: Generator,
     /// Login requests from other devices and account fingerprints.
     access: Access,
+    transfer: Transfer,
+    sends: Sends,
 }
 
 type Shared = Rc<RefCell<State>>;
@@ -360,6 +382,8 @@ impl App {
                 synced_at: None,
                 note: String::new(),
                 unlock: UnlockOptions::default(),
+                policies: None,
+                live_problem: None,
             });
         }
         let bridge = Arc::new(Bridge::new(|prompt| {
@@ -381,7 +405,6 @@ impl App {
         let ssh_settings = load_ssh_settings(&store);
         let prefs = Prefs::from_settings(&store.read_settings());
         let generator = Generator::from_settings(&store.read_settings());
-        let system_scheme = window.global::<crate::Palette>().get_color_scheme();
         let state: Shared = Rc::new(RefCell::new(State {
             store,
             accounts,
@@ -406,10 +429,12 @@ impl App {
             prompts: VecDeque::new(),
             ssh_settings,
             prefs,
-            system_scheme,
+            scheme_forced: false,
             desktop: Integration::new(),
             generator,
             access: Access::default(),
+            transfer: Transfer::default(),
+            sends: Sends::default(),
         }));
         CONTEXT.with(|c| *c.borrow_mut() = Some((window.as_weak(), state.clone())));
         window.set_rows(ModelRc::from(state.borrow().rows_model.clone()));
@@ -424,6 +449,15 @@ impl App {
         wire_settings(&app.window, &state);
         wire_generator(&app.window, &state);
         wire_access(&app.window, &state);
+        wire_transfer(&app.window, &state);
+        {
+            let st = state.clone();
+            app.window
+                .window()
+                .on_close_requested(move || close_requested(&st));
+        }
+        update_tray_status(&state);
+        wire_sends(&app.window, &state);
         apply_prefs(&app.window, &state);
         refresh_tree(&app.window, &state);
         let first = state
@@ -482,6 +516,27 @@ impl App {
     }
 }
 
+impl App {
+    /// Whether the tray is up and the user wants to start there.
+    /// Records that the window starts hidden in the tray.
+    pub fn note_hidden(&self) {
+        CONTEXT.with(|c| {
+            if let Some((_, st)) = c.borrow().as_ref() {
+                st.borrow_mut().desktop.window_shown(false);
+            }
+        });
+    }
+
+    pub fn starts_in_tray(&self) -> bool {
+        CONTEXT.with(|c| {
+            c.borrow().as_ref().is_some_and(|(_, st)| {
+                let st = st.borrow();
+                st.prefs.start_in_tray && st.desktop.tray_running()
+            })
+        })
+    }
+}
+
 impl State {
     /// The strictest of the user's choice and any organisation policy.
     fn idle_limit(&self) -> Option<Duration> {
@@ -489,11 +544,6 @@ impl State {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }
-    }
-
-    /// The longest timeout organisation policies allow, if any.
-    fn policy_idle_limit(&self) -> Option<Duration> {
-        None
     }
 
     fn current_totp_period(&self) -> u64 {
@@ -561,7 +611,7 @@ fn leave_to(win: &AppWindow, st: &Shared, then: Pending) -> bool {
 
 /// Locks, or logs out, every unlocked account after the idle time.
 fn time_out_all(win: &AppWindow, st: &Shared) {
-    let log_out = st.borrow().prefs.lock_action == LockAction::LogOut;
+    let log_out = st.borrow().timeout_action() == LockAction::LogOut;
     if log_out {
         let s = st.borrow();
         for a in &s.accounts {
@@ -623,4 +673,5 @@ fn handle_event(win: &AppWindow, st: &Shared, id: &str, event: Event) {
     }
     update_agent_keys(win, st);
     render_login_request(win, st);
+    update_tray_status(st);
 }

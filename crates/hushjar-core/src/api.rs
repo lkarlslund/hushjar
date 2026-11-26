@@ -36,6 +36,8 @@ pub enum ApiError {
     NewDeviceVerificationRequired,
     #[error("the session has expired; sign in again")]
     Unauthorized,
+    #[error("the server does not know this request")]
+    NotFound,
     #[error("the server sent an unexpected reply")]
     Decode,
     #[error("unsupported key derivation settings")]
@@ -540,7 +542,12 @@ impl Client {
         let value = if text.trim().is_empty() {
             Value::Null
         } else {
-            serde_json::from_str(&text).map_err(|_| ApiError::Decode)?
+            match serde_json::from_str(&text) {
+                Ok(value) => value,
+                // Error pages from proxies and unknown routes are not JSON.
+                Err(_) if !(200..300).contains(&status) => Value::Null,
+                Err(_) => return Err(ApiError::Decode),
+            }
         };
         Ok((status, value))
     }
@@ -553,6 +560,9 @@ impl Client {
     fn rejection(status: u16, body: &Value) -> ApiError {
         if status == 401 {
             return ApiError::Unauthorized;
+        }
+        if status == 404 || status == 405 {
+            return ApiError::NotFound;
         }
         // Vaultwarden sends an empty error_description beside the message.
         let message = [
@@ -874,6 +884,59 @@ impl Client {
         .map(|_| ())
     }
 
+    /// Archives an item. Servers without archiving answer `NotFound`.
+    pub fn archive_cipher(&self, token: &str, id: &str) -> Result<(), ApiError> {
+        self.authed(
+            "PUT",
+            &format!("/ciphers/{id}/archive"),
+            token,
+            None,
+            SMALL_LIMIT * 16,
+        )
+        .map(|_| ())
+    }
+
+    /// Takes an item out of the archive.
+    pub fn unarchive_cipher(&self, token: &str, id: &str) -> Result<(), ApiError> {
+        self.authed(
+            "PUT",
+            &format!("/ciphers/{id}/unarchive"),
+            token,
+            None,
+            SMALL_LIMIT * 16,
+        )
+        .map(|_| ())
+    }
+
+    /// Moves a personal item into an organisation and its collections:
+    /// `{cipher, collectionIds}`. Returns the server's copy.
+    pub fn share_cipher(&self, token: &str, id: &str, body: &Value) -> Result<Value, ApiError> {
+        self.authed(
+            "PUT",
+            &format!("/ciphers/{id}/share"),
+            token,
+            Some(body),
+            SMALL_LIMIT * 16,
+        )
+    }
+
+    /// Replaces the collections an organisation item is in.
+    pub fn set_cipher_collections(
+        &self,
+        token: &str,
+        id: &str,
+        collections: &[String],
+    ) -> Result<Value, ApiError> {
+        let body = json!({ "collectionIds": collections });
+        self.authed(
+            "PUT",
+            &format!("/ciphers/{id}/collections"),
+            token,
+            Some(&body),
+            SMALL_LIMIT * 16,
+        )
+    }
+
     /// Uploads a batch of imported items and folders in one request.
     pub fn import_ciphers(&self, token: &str, body: &Value) -> Result<(), ApiError> {
         self.authed("POST", "/ciphers/import", token, Some(body), SMALL_LIMIT)
@@ -883,6 +946,34 @@ impl Client {
     pub fn create_folder(&self, token: &str, encrypted_name: &str) -> Result<Value, ApiError> {
         let body = json!({ "name": encrypted_name });
         self.authed("POST", "/folders", token, Some(&body), SMALL_LIMIT)
+    }
+
+    pub fn rename_folder(
+        &self,
+        token: &str,
+        id: &str,
+        encrypted_name: &str,
+    ) -> Result<Value, ApiError> {
+        let body = json!({ "name": encrypted_name });
+        self.authed(
+            "PUT",
+            &format!("/folders/{id}"),
+            token,
+            Some(&body),
+            SMALL_LIMIT,
+        )
+    }
+
+    /// Deletes a folder. Its items stay, without a folder.
+    pub fn delete_folder(&self, token: &str, id: &str) -> Result<(), ApiError> {
+        self.authed(
+            "DELETE",
+            &format!("/folders/{id}"),
+            token,
+            None,
+            SMALL_LIMIT,
+        )
+        .map(|_| ())
     }
 
     /// Asks where to download an attachment. The reply carries a `url`,
@@ -1472,5 +1563,22 @@ mod tests {
                 .upload_azure("http://elsewhere.example/c", b"x")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn missing_archive_endpoint_is_not_found() {
+        let (base, server) = mock_server(404, 2);
+        let client = Client::new(Server::parse(&base).unwrap());
+        assert!(matches!(
+            client.archive_cipher("t", "id"),
+            Err(ApiError::NotFound)
+        ));
+        assert!(matches!(
+            client.unarchive_cipher("t", "id"),
+            Err(ApiError::NotFound)
+        ));
+        let seen = server.join().unwrap();
+        assert!(seen[0].0.starts_with("PUT /api/ciphers/id/archive"));
+        assert!(seen[1].0.starts_with("PUT /api/ciphers/id/unarchive"));
     }
 }

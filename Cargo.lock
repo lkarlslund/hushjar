@@ -1472,6 +1472,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
+ "libc",
  "objc2 0.6.5",
 ]
 
@@ -1603,6 +1605,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
 dependencies = [
+ "pkcs8 0.11.0",
  "signature 3.0.0",
 ]
 
@@ -2447,15 +2450,23 @@ name = "hushjar"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "async-channel",
  "embed-resource",
+ "futures-lite",
  "getrandom 0.4.3",
  "hushjar-agent",
  "hushjar-core",
+ "ksni",
  "png",
+ "resvg",
+ "rfd",
  "serde_json",
  "slint",
  "slint-build",
+ "thiserror 2.0.21",
  "ureq",
+ "uuid",
+ "zbus",
  "zeroize",
 ]
 
@@ -2487,17 +2498,20 @@ dependencies = [
  "base64 0.23.1",
  "cbc 0.2.1",
  "csv",
+ "ed25519-dalek",
  "getrandom 0.4.3",
  "hkdf 0.13.0",
  "hmac 0.13.0",
  "p256 0.14.0",
  "pbkdf2",
+ "pkcs8 0.11.0",
  "rmpv",
  "rsa",
  "serde",
  "serde_json",
  "sha1",
  "sha2 0.11.2",
+ "ssh-key",
  "thiserror 2.0.21",
  "tungstenite",
  "ureq",
@@ -3748,11 +3762,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
  "objc2 0.6.5",
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "objc2-uniform-type-identifiers 0.3.2",
 ]
 
 [[package]]
@@ -3991,7 +4007,7 @@ dependencies = [
  "objc2-link-presentation",
  "objc2-quartz-core 0.2.2",
  "objc2-symbols",
- "objc2-uniform-type-identifiers",
+ "objc2-uniform-type-identifiers 0.2.2",
  "objc2-user-notifications",
 ]
 
@@ -4018,6 +4034,16 @@ dependencies = [
  "block2 0.5.1",
  "objc2 0.5.3",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-uniform-type-identifiers"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7902ac02859fc1f7045f8b598c63f1ae0cc7efeaa06a9bc9f3d9a3c955974fa4"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -4404,6 +4430,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pkcs5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63d440a804ec8d6fafbb6b84471e013286658d373248927692ab3366686220ca"
+dependencies = [
+ "aes 0.9.4",
+ "aes-gcm",
+ "cbc 0.2.1",
+ "der 0.8.3",
+ "pbkdf2",
+ "rand_core 0.10.1",
+ "scrypt",
+ "sha2 0.11.2",
+ "spki 0.8.1",
+]
+
+[[package]]
 name = "pkcs8"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4420,6 +4463,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "451913da69c775a56034ea8d9003d27ee8948e12443eae7c038ba100a4f21cb7"
 dependencies = [
  "der 0.8.3",
+ "pkcs5",
+ "rand_core 0.10.1",
  "spki 0.8.1",
 ]
 
@@ -4461,6 +4506,12 @@ dependencies = [
  "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "pollster"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e9b9cf600136f5b976fbc5727d58c26e1ecab8ee23088d44ef1c7af793550ab"
 
 [[package]]
 name = "poly1305"
@@ -4870,6 +4921,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "rfd"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4b9d4857b10297ffb0f64cae711e983a7aeaee561848d56d429d3858bd8ed93"
+dependencies = [
+ "block2 0.6.2",
+ "dispatch2",
+ "js-sys",
+ "libc",
+ "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "objc2-uniform-type-identifiers 0.3.2",
+ "percent-encoding",
+ "pollster",
+ "raw-window-handle",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "web-sys",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "rgb"
 version = "0.8.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5067,6 +5146,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "salsa20"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f874456e72520ff1375a06c588eaf074b0f01f9e9e1aada45bd9b7954a6e42c"
+dependencies = [
+ "cfg-if",
+ "cipher 0.5.2",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5092,6 +5181,18 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "scrypt"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d87af57419b594aa23fa95f09f0e06d80d84ba01c26148c43844cad6ff4485f0"
+dependencies = [
+ "cfg-if",
+ "pbkdf2",
+ "salsa20",
+ "sha2 0.11.2",
+]
 
 [[package]]
 name = "sctk-adwaita"

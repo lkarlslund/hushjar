@@ -3,6 +3,7 @@
 use hushjar_core::generator::{
     self as make, MINIMUM_PASSWORD_LENGTH, PassphraseOptions, PasswordOptions, UsernameOptions,
 };
+use hushjar_core::policy::{GeneratorPolicy, GeneratorType};
 use serde_json::{Value, json};
 
 use super::*;
@@ -106,16 +107,40 @@ impl Generator {
 
     /// A new secret for a password field: a passphrase when that is the
     /// chosen kind, otherwise a password.
-    pub(super) fn secret(&self) -> Result<Zeroizing<String>, String> {
-        let result = if self.kind == Kind::Passphrase {
-            make::passphrase(&self.passphrase)
+    pub(super) fn secret(
+        &self,
+        policy: Option<&GeneratorPolicy>,
+    ) -> Result<Zeroizing<String>, String> {
+        let mut copy = self.settings();
+        copy.apply(policy);
+        let result = if copy.kind == Kind::Passphrase {
+            make::passphrase(&copy.passphrase)
         } else {
-            make::password(&self.password)
+            make::password(&copy.password)
         };
         result.map_err(|e| capitalise(&e.to_string()))
     }
 
-    fn generate(&mut self) {
+    /// The options that decide what is generated, without the rest.
+    fn settings(&self) -> Choices {
+        Choices {
+            kind: self.kind,
+            password: self.password.clone(),
+            passphrase: self.passphrase.clone(),
+        }
+    }
+
+    /// Raises the options to what the organisation policy requires.
+    fn enforce(&mut self, policy: Option<&GeneratorPolicy>) {
+        let mut choices = self.settings();
+        choices.apply(policy);
+        self.kind = choices.kind;
+        self.password = choices.password;
+        self.passphrase = choices.passphrase;
+    }
+
+    fn generate(&mut self, policy: Option<&GeneratorPolicy>) {
+        self.enforce(policy);
         let result = match self.kind {
             Kind::Password => make::password(&self.password),
             Kind::Passphrase => make::passphrase(&self.passphrase),
@@ -173,6 +198,176 @@ impl Generator {
     }
 }
 
+/// The generator options an organisation policy can change.
+#[derive(Clone, Debug, PartialEq)]
+struct Choices {
+    kind: Kind,
+    password: PasswordOptions,
+    passphrase: PassphraseOptions,
+}
+
+impl Choices {
+    fn apply(&mut self, policy: Option<&GeneratorPolicy>) {
+        let Some(policy) = policy else { return };
+        match (policy.forced_type, self.kind) {
+            (Some(GeneratorType::Password), Kind::Passphrase) => self.kind = Kind::Password,
+            (Some(GeneratorType::Passphrase), Kind::Password) => self.kind = Kind::Passphrase,
+            _ => {}
+        }
+        raise_password(&mut self.password, policy);
+        raise_passphrase(&mut self.passphrase, policy);
+    }
+}
+
+fn small(n: u32) -> u8 {
+    u8::try_from(n).unwrap_or(u8::MAX)
+}
+
+/// Lifts password options to the policy's minimums: never shorter, never
+/// fewer sets, never fewer numbers or symbols than required.
+fn raise_password(options: &mut PasswordOptions, policy: &GeneratorPolicy) {
+    options.uppercase |= policy.use_upper;
+    options.lowercase |= policy.use_lower;
+    options.numbers |= policy.use_numbers;
+    options.special |= policy.use_special;
+    if policy.use_upper {
+        options.min_uppercase = options.min_uppercase.max(1);
+    }
+    if policy.use_lower {
+        options.min_lowercase = options.min_lowercase.max(1);
+    }
+    let numbers = small(policy.min_numbers).max(u8::from(policy.use_numbers));
+    if numbers > 0 {
+        options.numbers = true;
+        options.min_number = options.min_number.max(numbers);
+    }
+    let special = small(policy.min_special).max(u8::from(policy.use_special));
+    if special > 0 {
+        options.special = true;
+        options.min_special = options.min_special.max(special);
+    }
+    options.length = options.length.max(small(policy.min_length));
+    // The required characters must fit in the password.
+    let required = [
+        options.min_uppercase,
+        options.min_lowercase,
+        options.min_number,
+        options.min_special,
+    ]
+    .iter()
+    .fold(0u8, |sum, n| sum.saturating_add(*n));
+    options.length = options.length.max(required).min(128);
+}
+
+fn raise_passphrase(options: &mut PassphraseOptions, policy: &GeneratorPolicy) {
+    options.num_words = options.num_words.max(small(policy.min_words)).min(20);
+    options.capitalize |= policy.capitalize;
+    options.include_number |= policy.include_number;
+}
+
+/// Combines the generator policies of several accounts: every requirement of
+/// every policy holds. A forced passphrase applies only if nobody forces a
+/// password (as for one account in the core).
+pub(super) fn combine(policies: &[&GeneratorPolicy]) -> Option<GeneratorPolicy> {
+    let mut all = policies.iter();
+    let mut merged = (*all.next()?).clone();
+    for p in all {
+        merged.forced_type = match (merged.forced_type, p.forced_type) {
+            (Some(GeneratorType::Password), _) | (_, Some(GeneratorType::Password)) => {
+                Some(GeneratorType::Password)
+            }
+            (a, b) => a.or(b),
+        };
+        merged.min_length = merged.min_length.max(p.min_length);
+        merged.use_upper |= p.use_upper;
+        merged.use_lower |= p.use_lower;
+        merged.use_numbers |= p.use_numbers;
+        merged.use_special |= p.use_special;
+        merged.min_numbers = merged.min_numbers.max(p.min_numbers);
+        merged.min_special = merged.min_special.max(p.min_special);
+        merged.min_words = merged.min_words.max(p.min_words);
+        merged.capitalize |= p.capitalize;
+        merged.include_number |= p.include_number;
+    }
+    Some(merged)
+}
+
+/// The sentence under the generator options that names what the
+/// organisation requires for the chosen kind, or nothing.
+pub(super) fn policy_note(policy: &GeneratorPolicy, kind: Kind) -> String {
+    let mut needs: Vec<String> = Vec::new();
+    match kind {
+        Kind::Username => return String::new(),
+        Kind::Password => {
+            if policy.min_length > 0 {
+                needs.push(format!("at least {} characters", policy.min_length));
+            }
+            if policy.min_numbers > 0 {
+                needs.push(format!("at least {} numbers", policy.min_numbers));
+            } else if policy.use_numbers {
+                needs.push("numbers".into());
+            }
+            if policy.min_special > 0 {
+                needs.push(format!(
+                    "at least {} special characters",
+                    policy.min_special
+                ));
+            } else if policy.use_special {
+                needs.push("special characters".into());
+            }
+            if policy.use_upper {
+                needs.push("capital letters".into());
+            }
+            if policy.use_lower {
+                needs.push("small letters".into());
+            }
+        }
+        Kind::Passphrase => {
+            if policy.min_words > 0 {
+                needs.push(format!("at least {} words", policy.min_words));
+            }
+            if policy.capitalize {
+                needs.push("capitalised words".into());
+            }
+            if policy.include_number {
+                needs.push("a number".into());
+            }
+        }
+    }
+    let forced = match (policy.forced_type, kind) {
+        (Some(GeneratorType::Password), Kind::Passphrase) => {
+            "Your organisation only allows passwords. "
+        }
+        (Some(GeneratorType::Passphrase), Kind::Password) => {
+            "Your organisation only allows passphrases. "
+        }
+        _ => "",
+    };
+    if needs.is_empty() {
+        return forced.trim_end().to_string();
+    }
+    let last = needs.pop().unwrap_or_default();
+    let list = if needs.is_empty() {
+        last
+    } else {
+        format!("{} and {last}", needs.join(", "))
+    };
+    format!("{forced}Your organisation requires {list}")
+}
+
+impl State {
+    /// The generator rules of every unlocked account, combined.
+    pub(super) fn generator_policy(&self) -> Option<GeneratorPolicy> {
+        let found: Vec<&GeneratorPolicy> = self
+            .accounts
+            .iter()
+            .filter(|a| a.vault.is_some())
+            .filter_map(|a| a.policies.as_ref()?.generator.as_ref())
+            .collect();
+        combine(&found)
+    }
+}
+
 fn capitalise(text: &str) -> String {
     let mut chars = text.chars();
     match chars.next() {
@@ -189,7 +384,8 @@ pub(super) fn show_generator(win: &AppWindow, st: &Shared) {
         let mut state = st.borrow_mut();
         state.shown = Shown::Generator;
         state.selected = None;
-        state.generator.generate();
+        let policy = state.generator_policy();
+        state.generator.generate(policy.as_ref());
     }
     win.set_selected_key(SharedString::new());
     win.set_selected_index(-1);
@@ -225,6 +421,13 @@ pub(super) fn render_generator(win: &AppWindow, st: &Shared) {
     data.set_username_number(g.username_number);
     data.set_email(s(&g.email));
     data.set_domain(s(&g.domain));
+    data.set_policy_note(
+        state
+            .generator_policy()
+            .map(|p| policy_note(&p, g.kind))
+            .unwrap_or_default()
+            .into(),
+    );
     data.set_value(s(&g.value));
     data.set_error(s(&g.error));
     let now = unix_now();
@@ -254,6 +457,7 @@ fn generator_changed(win: &AppWindow, st: &Shared) {
     let clamp = |v: i32, lo: i32, hi: i32| v.clamp(lo, hi) as u8;
     {
         let mut state = st.borrow_mut();
+        let policy = state.generator_policy();
         let g = &mut state.generator;
         g.kind = match data.get_kind() {
             1 => Kind::Passphrase,
@@ -283,7 +487,7 @@ fn generator_changed(win: &AppWindow, st: &Shared) {
         g.username_number = data.get_username_number();
         g.email = data.get_email().to_string();
         g.domain = data.get_domain().to_string();
-        g.generate();
+        g.generate(policy.as_ref());
         let mut settings = state.store.read_settings();
         state.generator.store_into(&mut settings);
         let _ = state.store.write_settings(&settings);
@@ -310,7 +514,11 @@ pub(super) fn wire_generator(w: &AppWindow, state: &Shared) {
         generator_changed(&win, st);
     });
     on!(on_regenerate, |win, st| {
-        st.borrow_mut().generator.generate();
+        {
+            let mut state = st.borrow_mut();
+            let policy = state.generator_policy();
+            state.generator.generate(policy.as_ref());
+        }
         render_generator(&win, st);
     });
     on!(on_copy_value, |win, st| {
@@ -345,4 +553,198 @@ pub(super) fn wire_generator(w: &AppWindow, state: &Shared) {
         st.borrow_mut().generator.forget_history();
         render_generator(&win, st);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn policy() -> GeneratorPolicy {
+        GeneratorPolicy::default()
+    }
+
+    #[test]
+    fn password_options_are_raised_to_the_minimums() {
+        let strict = GeneratorPolicy {
+            min_length: 20,
+            use_upper: true,
+            use_numbers: true,
+            min_numbers: 3,
+            min_special: 2,
+            ..policy()
+        };
+        let mut o = PasswordOptions {
+            length: 12,
+            uppercase: false,
+            numbers: false,
+            special: false,
+            min_number: 0,
+            min_special: 0,
+            ..PasswordOptions::default()
+        };
+        raise_password(&mut o, &strict);
+        assert_eq!(o.length, 20);
+        assert!(o.uppercase && o.numbers && o.special);
+        assert_eq!((o.min_number, o.min_special, o.min_uppercase), (3, 2, 1));
+    }
+
+    #[test]
+    fn minimums_are_never_lowered() {
+        let mut o = PasswordOptions {
+            length: 40,
+            min_number: 5,
+            ..PasswordOptions::default()
+        };
+        raise_password(
+            &mut o,
+            &GeneratorPolicy {
+                min_length: 14,
+                min_numbers: 1,
+                ..policy()
+            },
+        );
+        assert_eq!((o.length, o.min_number), (40, 5));
+    }
+
+    #[test]
+    fn required_characters_must_fit_the_length() {
+        let mut o = PasswordOptions {
+            length: 8,
+            ..PasswordOptions::default()
+        };
+        raise_password(
+            &mut o,
+            &GeneratorPolicy {
+                min_numbers: 9,
+                min_special: 9,
+                ..policy()
+            },
+        );
+        assert!(o.length >= 18);
+    }
+
+    #[test]
+    fn passphrase_options_are_raised() {
+        let mut o = PassphraseOptions {
+            num_words: 3,
+            word_separator: "-".into(),
+            capitalize: false,
+            include_number: false,
+        };
+        raise_passphrase(
+            &mut o,
+            &GeneratorPolicy {
+                min_words: 5,
+                capitalize: true,
+                include_number: true,
+                ..policy()
+            },
+        );
+        assert_eq!(
+            (o.num_words, o.capitalize, o.include_number),
+            (5, true, true)
+        );
+    }
+
+    #[test]
+    fn a_forced_type_switches_the_kind() {
+        let mut c = Choices {
+            kind: Kind::Passphrase,
+            password: PasswordOptions::default(),
+            passphrase: PassphraseOptions::default(),
+        };
+        c.apply(Some(&GeneratorPolicy {
+            forced_type: Some(GeneratorType::Password),
+            ..policy()
+        }));
+        assert_eq!(c.kind, Kind::Password);
+        // Usernames are not passwords, so they stay available.
+        c.kind = Kind::Username;
+        c.apply(Some(&GeneratorPolicy {
+            forced_type: Some(GeneratorType::Passphrase),
+            ..policy()
+        }));
+        assert_eq!(c.kind, Kind::Username);
+        c.kind = Kind::Password;
+        c.apply(Some(&GeneratorPolicy {
+            forced_type: Some(GeneratorType::Passphrase),
+            ..policy()
+        }));
+        assert_eq!(c.kind, Kind::Passphrase);
+        c.kind = Kind::Username;
+        c.apply(None);
+        assert_eq!(c.kind, Kind::Username);
+    }
+
+    #[test]
+    fn policies_of_several_accounts_combine() {
+        assert_eq!(combine(&[]), None);
+        let a = GeneratorPolicy {
+            min_length: 14,
+            forced_type: Some(GeneratorType::Passphrase),
+            ..policy()
+        };
+        let b = GeneratorPolicy {
+            min_length: 20,
+            use_special: true,
+            ..policy()
+        };
+        let c = combine(&[&a, &b]).unwrap();
+        assert_eq!((c.min_length, c.use_special), (20, true));
+        assert_eq!(c.forced_type, Some(GeneratorType::Passphrase));
+        let d = GeneratorPolicy {
+            forced_type: Some(GeneratorType::Password),
+            ..policy()
+        };
+        assert_eq!(
+            combine(&[&a, &d]).unwrap().forced_type,
+            Some(GeneratorType::Password)
+        );
+    }
+
+    #[test]
+    fn the_note_names_the_requirements() {
+        let p = GeneratorPolicy {
+            min_length: 14,
+            use_numbers: true,
+            ..policy()
+        };
+        assert_eq!(
+            policy_note(&p, Kind::Password),
+            "Your organisation requires at least 14 characters and numbers"
+        );
+        assert_eq!(
+            policy_note(
+                &GeneratorPolicy {
+                    min_length: 14,
+                    ..policy()
+                },
+                Kind::Password
+            ),
+            "Your organisation requires at least 14 characters"
+        );
+        assert_eq!(policy_note(&p, Kind::Username), "");
+        assert_eq!(policy_note(&policy(), Kind::Password), "");
+        let only = GeneratorPolicy {
+            forced_type: Some(GeneratorType::Passphrase),
+            ..policy()
+        };
+        assert_eq!(
+            policy_note(&only, Kind::Password),
+            "Your organisation only allows passphrases."
+        );
+    }
+
+    #[test]
+    fn a_generated_secret_meets_the_policy() {
+        let g = Generator::from_settings(&json!({}));
+        let p = GeneratorPolicy {
+            min_length: 24,
+            min_numbers: 4,
+            ..policy()
+        };
+        let secret = g.secret(Some(&p)).unwrap();
+        assert!(secret.len() >= 24);
+        assert!(secret.chars().filter(char::is_ascii_digit).count() >= 4);
+    }
 }

@@ -3,6 +3,8 @@ import { SignInPane, AccountPane } from "panes.slint";
 import { UnlockData, PinUnlockForm } from "access.slint";
 import { SettingsPane } from "settings.slint";
 import { GeneratorPane } from "generator.slint";
+import { TransferPane } from "transfer.slint";
+import { SendsPane } from "sends.slint";
 import { Theme, Icons } from "theme.slint";
 import { Icon, IconButton, ActionButton, Avatar, TypeTile, Segmented, Toggle } from "widgets.slint";
 import {
@@ -420,6 +422,9 @@ export component DetailsPane inherits Rectangle {
     if root.mode == PaneMode.settings: SettingsPane {}
 
     if root.mode == PaneMode.generator: GeneratorPane {}
+    if root.mode == PaneMode.sends: SendsPane {}
+
+    if root.mode == PaneMode.transfer: TransferPane {}
 
     if root.mode == PaneMode.account: AccountPane {
         account: root.summary;

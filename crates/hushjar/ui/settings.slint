@@ -12,6 +12,8 @@ export struct AccountSecurity {
     pin: bool,
     // The PIN is kept only until Hushjar quits.
     pin-in-memory: bool,
+    // An organisation policy forbids PIN unlock.
+    pin-disabled: bool,
     system-auth: bool,
 }
 
@@ -79,7 +81,8 @@ component AccountRow inherits VerticalLayout {
     }
     Row {
         label: "Unlock with a PIN";
-        hint: !root.account.pin ? ""
+        hint: root.account.pin-disabled ? "Your organisation does not allow unlocking with a PIN."
+            : !root.account.pin ? ""
             : root.account.pin-in-memory ? "A PIN is set until Hushjar quits; then the master password is needed once. Five wrong tries remove it."
             : "A PIN is set. Five wrong tries remove it.";
         if root.account.pin: ActionButton {
@@ -87,7 +90,7 @@ component AccountRow inherits VerticalLayout {
             enabled: root.account.unlocked;
             clicked => { SettingsData.remove-pin(root.index); }
         }
-        if !root.account.pin && !root.entering: ActionButton {
+        if !root.account.pin && !root.entering && !root.account.pin-disabled: ActionButton {
             text: "Set a PIN…";
             enabled: root.account.unlocked;
             clicked => { root.entering = true; }

@@ -8,6 +8,16 @@ use crate::{SettingsData, UnlockData};
 /// The shortest PIN the settings pane accepts.
 const MIN_PIN_CHARS: usize = 4;
 
+/// Whether the locked pane offers the PIN: one is set up, there is an
+/// offline copy for it to open, and no organisation policy forbids it.
+fn pin_usable(state: &State, account: usize) -> bool {
+    state
+        .accounts
+        .get(account)
+        .is_some_and(|a| a.unlock.pin && !a.unlock.logged_out)
+        && !pin_disabled(state, account)
+}
+
 /// Fills the locked pane's PIN options for `account`. The switch back to
 /// the master password resets when another account is shown.
 pub(super) fn render_unlock(win: &AppWindow, st: &Shared, account: usize) {
@@ -15,7 +25,8 @@ pub(super) fn render_unlock(win: &AppWindow, st: &Shared, account: usize) {
     let Some(a) = state.accounts.get(account) else {
         return;
     };
-    let (id, pin) = (a.profile.id.clone(), a.unlock.pin);
+    let id = a.profile.id.clone();
+    let pin = pin_usable(&state, account);
     let data = win.global::<UnlockData>();
     data.set_pin_available(pin);
     if state.access.locked_shown.as_deref() != Some(id.as_str()) || !pin {
@@ -45,8 +56,10 @@ fn unlock_with_pin(win: &AppWindow, st: &Shared, pin: &str) {
 }
 
 /// Why a PIN cannot be set, if it cannot.
-fn pin_problem(pin: &str, unlocked: bool) -> Option<&'static str> {
-    if !unlocked {
+fn pin_problem(pin: &str, unlocked: bool, disabled: bool) -> Option<&'static str> {
+    if disabled {
+        Some("Your organisation does not allow unlocking with a PIN")
+    } else if !unlocked {
         Some("Unlock the account to set a PIN")
     } else if pin.chars().count() < MIN_PIN_CHARS {
         Some("Use a PIN of 4 characters or more")
@@ -63,7 +76,7 @@ pub(super) fn set_pin(win: &AppWindow, st: &Shared, account: usize, pin: &str) {
     let Some(a) = state.accounts.get(account) else {
         return;
     };
-    if let Some(problem) = pin_problem(pin, a.vault.is_some()) {
+    if let Some(problem) = pin_problem(pin, a.vault.is_some(), pin_disabled(&state, account)) {
         drop(state);
         return toast(win, st, problem);
     }
@@ -86,6 +99,7 @@ pub(super) fn pin_state_event(
     index: usize,
     stored: bool,
     held: bool,
+    offline_copy: Option<bool>,
 ) {
     let (before, shown) = {
         let mut state = st.borrow_mut();
@@ -93,6 +107,9 @@ pub(super) fn pin_state_event(
         let before = unlock.pin;
         unlock.pin = stored || held;
         unlock.pin_in_memory = held && !stored;
+        if let Some(offline_copy) = offline_copy {
+            unlock.logged_out = !offline_copy;
+        }
         (before, state.shown.clone())
     };
     match shown {
@@ -125,10 +142,11 @@ mod tests {
 
     #[test]
     fn pins_need_an_unlocked_account_and_four_characters() {
-        assert!(pin_problem("1234", false).is_some());
-        assert!(pin_problem("123", true).is_some());
-        assert_eq!(pin_problem("1234", true), None);
+        assert!(pin_problem("1234", false, false).is_some());
+        assert!(pin_problem("123", true, false).is_some());
+        assert_eq!(pin_problem("1234", true, false), None);
         // Characters, not bytes.
-        assert!(pin_problem("æø", true).is_some());
+        assert!(pin_problem("æø", true, false).is_some());
+        assert!(pin_problem("1234", true, true).is_some());
     }
 }

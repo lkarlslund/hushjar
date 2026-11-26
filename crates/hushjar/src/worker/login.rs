@@ -98,12 +98,14 @@ fn resolve(second: Option<Second>, server: &Server) -> Result<Option<Factor>, We
 }
 
 /// Reports a finished sign-in attempt and keeps the session on success.
+/// Returns whether it signed in.
 fn report(
     result: Result<Session, SessionError>,
     profile: &mut Option<Profile>,
     session: &mut Option<Session>,
     emit: &dyn Fn(Event),
-) {
+) -> bool {
+    let signed_in = result.is_ok();
     match result {
         Ok(s) => {
             *profile = Some(s.profile.clone());
@@ -122,17 +124,19 @@ fn report(
             message: describe(&e),
         }),
     }
+    signed_in
 }
 
 /// Signs in with a password, a second factor and a new-device code as
-/// given. A saved account (`profile`) keeps its own device.
+/// given. A saved account (`profile`) keeps its own device. Returns
+/// whether it signed in.
 pub(super) fn sign_in(
     store: &Store,
     request: SignInRequest,
     profile: &mut Option<Profile>,
     session: &mut Option<Session>,
     emit: &dyn Fn(Event),
-) {
+) -> bool {
     let SignInRequest {
         server,
         email,
@@ -144,9 +148,10 @@ pub(super) fn sign_in(
     let factor = match resolve(second, &server) {
         Ok(factor) => factor,
         Err(e) => {
-            return emit(Event::Failed {
+            emit(Event::Failed {
                 message: e.to_string(),
             });
+            return false;
         }
     };
     let options = SignInOptions {
@@ -158,7 +163,7 @@ pub(super) fn sign_in(
         device: device.as_ref(),
     };
     let result = Session::sign_in_with(store, server, &email, &password, options, profile.as_ref());
-    report(result, profile, session, emit);
+    report(result, profile, session, emit)
 }
 
 /// Asks for another new-device code, as the same device.
@@ -239,16 +244,17 @@ pub(super) fn start_device_login(
     }
 }
 
-/// Checks the login request once; signs in when it was approved.
+/// Checks the login request once; signs in when it was approved. Returns
+/// whether it signed in.
 pub(super) fn poll_device_login(
     store: &Store,
     kept: &mut Kept,
     profile: &mut Option<Profile>,
     session: &mut Option<Session>,
     emit: &dyn Fn(Event),
-) {
+) -> bool {
     let Some(request) = kept.device_login.as_mut() else {
-        return;
+        return false;
     };
     let ended = |message: &str| Event::DeviceLoginEnded {
         message: message.into(),
@@ -260,7 +266,7 @@ pub(super) fn poll_device_login(
             if result.is_ok() {
                 kept.device_login = None;
             }
-            report(result, profile, session, emit);
+            return report(result, profile, session, emit);
         }
         Ok(DeviceLoginStatus::Denied) => {
             kept.device_login = None;
@@ -277,9 +283,11 @@ pub(super) fn poll_device_login(
             message: describe(&e),
         }),
     }
+    false
 }
 
 /// Finishes an approved device login that also needs two-step login.
+/// Returns whether it signed in.
 pub(super) fn finish_device_login(
     store: &Store,
     server: &Server,
@@ -288,18 +296,20 @@ pub(super) fn finish_device_login(
     profile: &mut Option<Profile>,
     session: &mut Option<Session>,
     emit: &dyn Fn(Event),
-) {
+) -> bool {
     let Some(request) = kept.device_login.as_ref() else {
-        return emit(Event::DeviceLoginEnded {
+        emit(Event::DeviceLoginEnded {
             message: "The login request is gone. Start again.".into(),
         });
+        return false;
     };
     let factor = match resolve(second, server) {
         Ok(factor) => factor,
         Err(e) => {
-            return emit(Event::Failed {
+            emit(Event::Failed {
                 message: e.to_string(),
             });
+            return false;
         }
     };
     let result = Session::finish_device_login(
@@ -311,7 +321,7 @@ pub(super) fn finish_device_login(
     if result.is_ok() {
         kept.device_login = None;
     }
-    report(result, profile, session, emit);
+    report(result, profile, session, emit)
 }
 
 pub(super) fn cancel_device_login(kept: &mut Kept) {
@@ -356,11 +366,18 @@ pub(super) fn answer_login_request(
     }
 }
 
-/// Whether PIN unlock is set up, on disk or in memory.
-pub(super) fn pin_state(store: &Store, profile: &Profile, kept: &Kept) -> Event {
+/// Whether PIN unlock is set up, on disk or in memory, and whether there
+/// is an offline copy for it to open (`None`: not looked at).
+pub(super) fn pin_state(
+    store: &Store,
+    profile: &Profile,
+    kept: &Kept,
+    offline_copy: Option<bool>,
+) -> Event {
     Event::PinState {
         stored: Session::has_stored_pin(store, profile),
         held: kept.held_pin.is_some(),
+        offline_copy,
     }
 }
 
@@ -381,7 +398,7 @@ pub(super) fn set_pin(
     match s.enable_pin(store, pin, persist) {
         Ok(unlock) => {
             kept.held_pin = (!persist).then_some(unlock);
-            emit(pin_state(store, &s.profile, kept));
+            emit(pin_state(store, &s.profile, kept, None));
         }
         Err(e) => emit(Event::Failed {
             message: describe(&e),
@@ -396,7 +413,7 @@ pub(super) fn remove_pin(store: &Store, profile: &Profile, kept: &mut Kept, emit
             message: describe(&e),
         });
     }
-    emit(pin_state(store, profile, kept));
+    emit(pin_state(store, profile, kept, None));
 }
 
 /// The message for a wrong PIN.
@@ -421,7 +438,7 @@ pub(super) fn unlock_with_pin(
         Err(SessionError::WrongPin { attempts_left }) => failed(wrong_pin_message(attempts_left)),
         Err(SessionError::PinUnavailable) => {
             kept.held_pin = None;
-            emit(pin_state(store, profile, kept));
+            emit(pin_state(store, profile, kept, None));
             failed("PIN unlock is off now. Unlock with your master password.".into());
         }
         Err(SessionError::NoOfflineCopy) => {
@@ -686,7 +703,8 @@ mod interop {
                 e,
                 Event::PinState {
                     stored: true,
-                    held: false
+                    held: false,
+                    ..
                 }
             )
         });
@@ -711,7 +729,8 @@ mod interop {
                 e,
                 Event::PinState {
                     stored: false,
-                    held: true
+                    held: true,
+                    ..
                 }
             )
         });
@@ -729,7 +748,8 @@ mod interop {
                 e,
                 Event::PinState {
                     stored: false,
-                    held: false
+                    held: false,
+                    ..
                 }
             )
         });

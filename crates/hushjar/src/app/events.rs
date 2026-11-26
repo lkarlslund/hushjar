@@ -10,7 +10,11 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
         return handle_sign_in_event(win, st, event);
     }
     let synced = matches!(event, Event::Synced { .. });
+    if matches!(event, Event::SaveUncertain { .. }) && st.borrow().shown == Shown::Sends {
+        sends::save_uncertain(win, st, index);
+    }
     match event {
+        Event::SendSaved { send, vault, link } => sends::saved(win, st, index, *send, vault, link),
         Event::Unlocked { vault, synced_at } | Event::Synced { vault, synced_at } => {
             let first_unlock;
             {
@@ -22,6 +26,7 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
                 a.synced_at = synced_at.or(a.synced_at);
                 a.busy = false;
                 a.note.clear();
+                a.unlock.logged_out = false;
                 if !first_unlock {
                     a.needs_sign_in = false;
                     a.two_factor.clear();
@@ -146,29 +151,37 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
                 render(win, st);
             }
         }
-        Event::Locked => {
+        Event::Locked => locked(win, st, index),
+        Event::LoggedOutByServer => {
             {
                 let mut state = st.borrow_mut();
-                let a = &mut state.accounts[index];
-                a.view = Account::locked(&a.profile);
-                a.vault = None;
-                a.busy = false;
-                if state.draft.as_ref().is_some_and(|d| d.account == index) {
-                    state.draft = None;
-                }
-                let affected = match &state.shown {
-                    Shown::Item { account, .. } | Shown::Account(account) => *account == index,
-                    Shown::Group(key) => state.row(key).is_some_and(|r| r.account == index),
-                    _ => false,
-                };
-                if affected {
-                    state.shown = Shown::Locked(index);
-                    state.selected = Some(state.accounts[index].profile.id.clone());
-                }
+                state.accounts[index].note =
+                    "Signed out by the server: unlock to sign in again".into();
+                state.accounts[index].unlock.logged_out = true;
+                state.generator.forget_history();
             }
-            refresh_tree(win, st);
-            render(win, st);
+            locked(win, st, index);
+            let email = st.borrow().accounts[index].profile.email.clone();
+            toast(
+                win,
+                st,
+                &format!("{email} was signed out by the server. Unlock it to sign in again."),
+            );
             update_sync_text(win, st);
+        }
+        Event::Policies(policies) => {
+            st.borrow_mut().accounts[index].policies = Some(*policies);
+            // The settings and generator panes show what policies require.
+            if matches!(st.borrow().shown, Shown::Settings | Shown::Generator) {
+                render(win, st);
+            }
+        }
+        Event::LoginRequest { .. } => check_login_requests(st, index),
+        Event::LiveStatus { problem } => {
+            st.borrow_mut().accounts[index].live_problem = problem;
+            if matches!(st.borrow().shown, Shown::Account(i) if i == index) {
+                render(win, st);
+            }
         }
         Event::Removed => {
             {
@@ -195,7 +208,11 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
         Event::LoginRequests { requests } => login_requests_event(win, st, index, requests),
         Event::LoginRequestAnswered { approved } => login_answered_event(win, st, approved),
         Event::AccountFingerprint { phrase } => fingerprint_event(win, st, index, phrase),
-        Event::PinState { stored, held } => pin_state_event(win, st, index, stored, held),
+        Event::PinState {
+            stored,
+            held,
+            offline_copy,
+        } => pin_state_event(win, st, index, stored, held, offline_copy),
         Event::SignedIn { .. }
         | Event::TwoFactorRequired { .. }
         | Event::EmailSent
@@ -203,5 +220,39 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
         | Event::DeviceLoginStarted { .. }
         | Event::DeviceLoginWaiting
         | Event::DeviceLoginEnded { .. } => {}
+        event @ (Event::PasswordVerified
+        | Event::PasswordRejected
+        | Event::Exported { .. }
+        | Event::ImportParsed { .. }
+        | Event::ImportPasswordNeeded { .. }
+        | Event::Imported { .. }
+        | Event::TransferFailed { .. }) => handle_transfer_event(win, st, index, event),
     }
+}
+
+/// An account is locked, by the user, a timeout or the server.
+fn locked(win: &AppWindow, st: &Shared, index: usize) {
+    {
+        let mut state = st.borrow_mut();
+        let a = &mut state.accounts[index];
+        a.view = Account::locked(&a.profile);
+        a.vault = None;
+        a.busy = false;
+        a.live_problem = None;
+        if state.draft.as_ref().is_some_and(|d| d.account == index) {
+            state.draft = None;
+        }
+        let affected = match &state.shown {
+            Shown::Item { account, .. } | Shown::Account(account) => *account == index,
+            Shown::Group(key) => state.row(key).is_some_and(|r| r.account == index),
+            _ => false,
+        };
+        if affected {
+            state.shown = Shown::Locked(index);
+            state.selected = Some(state.accounts[index].profile.id.clone());
+        }
+    }
+    refresh_tree(win, st);
+    render(win, st);
+    update_sync_text(win, st);
 }
