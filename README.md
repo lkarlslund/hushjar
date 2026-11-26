@@ -4,7 +4,8 @@ A desktop app for your secrets, written in Rust with [Slint](https://slint.dev).
 It targets Linux on Wayland first, with Windows, macOS and Android to follow.
 
 Hushjar replaces VaultGoblin, an earlier Go and Wails client for Bitwarden and
-Vaultwarden. This is an early skeleton and does not handle secrets yet.
+Vaultwarden. It is currently a UI prototype with dummy data and does not
+handle real secrets yet. The plan is in [docs/ui-plan.md](docs/ui-plan.md).
 
 ## Layout
 
@@ -20,3 +21,12 @@ cargo run -p hushjar
 cargo clippy --workspace --all-targets
 cargo test --workspace
 ```
+
+To save screenshots of the prototype's main states (only Hushjar's own window
+is captured) and quit:
+
+```sh
+HUSHJAR_SNAPSHOT_DIR=/tmp/hushjar-shots cargo run -p hushjar --features snapshot
+```
+
+Set `HUSHJAR_COLOR_SCHEME=light` or `dark` to override the system theme.

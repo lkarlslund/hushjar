@@ -1,0 +1,327 @@
+import { ListView } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { Icon, IconButton, Avatar, Segmented } from "widgets.slint";
+import { TreeRow, RowKind, RowIcon } from "types.slint";
+
+component TreeRowView inherits Rectangle {
+    in property <TreeRow> entry;
+    in property <bool> selected;
+    in property <bool> tree-focused;
+    callback clicked;
+    callback toggle;
+    callback activated;
+
+    height: Theme.row-height;
+    accessible-role: list-item;
+    accessible-label: root.entry.label;
+    accessible-item-selected: root.selected;
+    accessible-expandable: root.entry.expandable;
+    accessible-expanded: root.entry.expanded;
+    accessible-action-default => { root.clicked(); }
+    accessible-action-expand => { root.toggle(); }
+
+    Rectangle {
+        x: 4px;
+        width: parent.width - 8px;
+        border-radius: 6px;
+        background: root.selected
+            ? (root.tree-focused ? Theme.selection : Theme.pressed)
+            : touch.has-hover ? Theme.hover : transparent;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        double-clicked => { root.activated(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 6px + root.entry.depth * 14px;
+        padding-right: 12px;
+        spacing: 6px;
+
+        Rectangle {
+            width: 16px;
+            if root.entry.expandable: Icon {
+                source: Icons.chevron-right;
+                width: 14px;
+                height: 14px;
+                tint: Theme.faint;
+                transform-rotation: root.entry.expanded ? 90deg : 0deg;
+                animate transform-rotation { duration: 120ms; easing: ease-out; }
+            }
+            TouchArea {
+                enabled: root.entry.expandable;
+                mouse-cursor: pointer;
+                clicked => { root.toggle(); }
+            }
+        }
+
+        if root.entry.kind == RowKind.account: VerticalLayout {
+            alignment: center;
+            Avatar {
+                initials: root.entry.initials;
+                tint: root.entry.locked ? Theme.faint : root.entry.tint;
+                size: 20px;
+            }
+        }
+        if root.entry.kind != RowKind.account: VerticalLayout {
+            alignment: center;
+            Icon {
+                source: Icons.for-row(root.entry.icon);
+                tint: root.entry.kind == RowKind.item ? Theme.type-color(root.entry.icon) : root.entry.icon == RowIcon.favorites ? Theme.honey : Theme.muted;
+            }
+        }
+
+        Text {
+            text: root.entry.label;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            overflow: elide;
+            font-size: Theme.body;
+            font-weight: root.entry.kind == RowKind.account ? 600 : 400;
+            color: root.entry.locked ? Theme.muted : Theme.text;
+        }
+        if root.entry.detail != "": Text {
+            text: root.entry.detail;
+            max-width: 130px;
+            vertical-alignment: center;
+            overflow: elide;
+            font-size: Theme.small;
+            color: Theme.faint;
+        }
+        if root.entry.locked: VerticalLayout {
+            alignment: center;
+            Icon { source: Icons.lock; width: 13px; height: 13px; tint: Theme.faint; }
+        }
+        if root.entry.kind == RowKind.group && root.entry.count > 0: Text {
+            text: root.entry.count;
+            vertical-alignment: center;
+            font-size: Theme.small;
+            color: Theme.faint;
+        }
+    }
+}
+
+export component VaultTree inherits Rectangle {
+    in property <[TreeRow]> rows;
+    in property <string> selected-key;
+    in property <int> selected-index: -1;
+    in property <int> match-count;
+    in property <int> group-by;
+    in-out property <string> filter-text;
+
+    callback filter-edited(string);
+    callback filter-accepted();
+    callback group-by-picked(int);
+    callback row-clicked(string);
+    callback row-toggled(string);
+    callback row-activated(string);
+    callback move-selection(int);
+    callback expand-selection();
+    callback collapse-selection();
+    callback activate-selection();
+    callback add-account();
+
+    public function focus-filter() {
+        filter.focus();
+        filter.select-all();
+    }
+
+    public function focus-tree() {
+        scope.focus();
+    }
+
+    function scroll-to-selection() {
+        if (root.selected-index < 0) {
+            return;
+        }
+        if (root.selected-index * Theme.row-height < -list.content-y) {
+            list.content-y = -root.selected-index * Theme.row-height;
+        } else if ((root.selected-index + 1) * Theme.row-height > -list.content-y + list.visible-height) {
+            list.content-y = -((root.selected-index + 1) * Theme.row-height - list.visible-height);
+        }
+    }
+
+    changed selected-index => { root.scroll-to-selection(); }
+
+    background: Theme.sidebar;
+
+    VerticalLayout {
+        padding-top: 10px;
+        padding-bottom: 6px;
+        spacing: 8px;
+
+        // Filter box
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+
+            Rectangle {
+                height: 32px;
+                border-radius: 7px;
+                background: Theme.surface;
+                border-width: 1px;
+                border-color: filter.has-focus ? Theme.honey : Theme.border;
+
+                HorizontalLayout {
+                    padding-left: 9px;
+                    padding-right: 4px;
+                    spacing: 7px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Icon { source: Icons.search; width: 14px; height: 14px; }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        filter := TextInput {
+                            width: 100%;
+                            height: 100%;
+                            text <=> root.filter-text;
+                            vertical-alignment: center;
+                            single-line: true;
+                            font-size: Theme.body;
+                            color: Theme.text;
+                            selection-background-color: Theme.selection;
+                            accessible-role: text-input;
+                            accessible-label: "Filter";
+                            edited => { root.filter-edited(self.text); }
+                            accepted => { root.filter-accepted(); }
+                            key-pressed(event) => {
+                                if (event.text == Key.Escape && self.text != "") {
+                                    self.text = "";
+                                    root.filter-edited("");
+                                    return accept;
+                                }
+                                if (event.text == Key.DownArrow) {
+                                    scope.focus();
+                                    root.move-selection(1);
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        Text {
+                            visible: root.filter-text == "";
+                            x: 0;
+                            height: 100%;
+                            text: "Filter  (Ctrl+F)";
+                            vertical-alignment: center;
+                            font-size: Theme.body;
+                            color: Theme.faint;
+                        }
+                    }
+
+                    if root.filter-text != "": Text {
+                        text: root.match-count == 1 ? "1 match" : root.match-count + " matches";
+                        vertical-alignment: center;
+                        font-size: Theme.small;
+                        color: root.match-count == 0 ? Theme.danger : Theme.faint;
+                    }
+                    if root.filter-text != "": VerticalLayout {
+                        alignment: center;
+                        IconButton {
+                            icon: Icons.close;
+                            label: "Clear filter";
+                            size: 24px;
+                            clicked => {
+                                root.filter-text = "";
+                                root.filter-edited("");
+                                filter.focus();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            Segmented {
+                options: ["Folders", "Collections", "Types"];
+                current: root.group-by;
+                picked(index) => { root.group-by-picked(index); }
+            }
+        }
+
+        scope := FocusScope {
+            vertical-stretch: 1;
+            key-pressed(event) => {
+                if (event.text == Key.UpArrow) { root.move-selection(-1); return accept; }
+                if (event.text == Key.DownArrow) { root.move-selection(1); return accept; }
+                if (event.text == Key.RightArrow) { root.expand-selection(); return accept; }
+                if (event.text == Key.LeftArrow) { root.collapse-selection(); return accept; }
+                if (event.text == Key.Return || event.text == " ") { root.activate-selection(); return accept; }
+                if (event.text == Key.Home) { root.move-selection(-100000); return accept; }
+                if (event.text == Key.End) { root.move-selection(100000); return accept; }
+                if (event.text == Key.PageUp) { root.move-selection(-10); return accept; }
+                if (event.text == Key.PageDown) { root.move-selection(10); return accept; }
+                return reject;
+            }
+
+            list := ListView {
+                width: 100%;
+                height: 100%;
+                // The rows and the list's size settle after the selection is
+                // set, so scroll again once they do.
+                changed visible-height => { root.scroll-to-selection(); }
+                changed content-height => { root.scroll-to-selection(); }
+                for row in root.rows: TreeRowView {
+                    entry: row;
+                    selected: row.key == root.selected-key;
+                    tree-focused: scope.has-focus;
+                    clicked => {
+                        scope.focus();
+                        root.row-clicked(row.key);
+                    }
+                    toggle => {
+                        scope.focus();
+                        root.row-toggled(row.key);
+                    }
+                    activated => { root.row-activated(row.key); }
+                }
+            }
+
+            if root.rows.length == 0: Text {
+                text: "Nothing matches “" + root.filter-text + "”";
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                color: Theme.muted;
+            }
+        }
+
+        // Add account
+        Rectangle {
+            height: 32px;
+            border-radius: 6px;
+            background: add-touch.has-hover ? Theme.hover : transparent;
+            accessible-role: button;
+            accessible-label: "Add account";
+            accessible-action-default => { root.add-account(); }
+
+            HorizontalLayout {
+                padding-left: 16px;
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    Icon { source: Icons.plus; width: 14px; height: 14px; }
+                }
+                Text {
+                    text: "Add account";
+                    vertical-alignment: center;
+                    font-size: Theme.body;
+                    color: Theme.muted;
+                }
+            }
+
+            add-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.add-account(); }
+            }
+        }
+    }
+}

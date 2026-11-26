@@ -1,0 +1,80 @@
+// Data passed between the Rust side and the UI.
+
+export enum RowKind { account, group, item }
+
+export enum RowIcon {
+    account,
+    favorites,
+    folder,
+    no-folder,
+    my-vault,
+    organization,
+    collection,
+    types,
+    login,
+    card,
+    identity,
+    note,
+    ssh-key,
+    archive,
+    trash,
+}
+
+// One visible row of the flattened tree.
+export struct TreeRow {
+    key: string,
+    kind: RowKind,
+    icon: RowIcon,
+    depth: int,
+    label: string,
+    detail: string,
+    count: int,
+    expandable: bool,
+    expanded: bool,
+    locked: bool,
+    tint: color,
+    initials: string,
+}
+
+export enum FieldKind { text, secret, url, totp, multiline, boolean, info }
+
+export struct DetailField {
+    label: string,
+    value: string,
+    kind: FieldKind,
+    copyable: bool,
+    removable: bool,
+    label-editable: bool,
+}
+
+export struct DetailSection {
+    title: string,
+    fields: [DetailField],
+    // Label of the button that adds a field while editing, or empty.
+    add-label: string,
+}
+
+export enum PaneMode { empty, item, group, locked }
+
+export struct ItemHeader {
+    name: string,
+    icon: RowIcon,
+    path: string,
+    favorite: bool,
+    deleted: bool,
+    is-new: bool,
+}
+
+export struct AccountBadge {
+    email: string,
+    server: string,
+    tint: color,
+    initials: string,
+}
+
+export struct GroupSummary {
+    title: string,
+    icon: RowIcon,
+    path: string,
+    count: int,
+}

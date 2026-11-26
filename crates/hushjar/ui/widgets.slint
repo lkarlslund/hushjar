@@ -1,0 +1,170 @@
+import { Theme, Icons } from "theme.slint";
+import { RowIcon } from "types.slint";
+
+export component Icon inherits Image {
+    in property <color> tint: Theme.muted;
+    width: 16px;
+    height: 16px;
+    colorize: root.tint;
+    image-fit: contain;
+}
+
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <color> tint: Theme.muted;
+    in property <bool> active;
+    in property <length> size: 28px;
+    callback clicked;
+
+    width: root.size;
+    height: root.size;
+    border-radius: 6px;
+    background: touch.pressed ? Theme.pressed : touch.has-hover ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+
+    Icon {
+        source: root.icon;
+        tint: root.active ? Theme.honey-text : touch.has-hover ? Theme.text : root.tint;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> has-icon;
+    in property <bool> primary;
+    in property <bool> danger;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    height: 30px;
+    min-width: layout.min-width;
+    border-radius: 6px;
+    opacity: root.enabled ? 1 : 0.45;
+    background: root.primary
+        ? (touch.has-hover && root.enabled ? Theme.honey.brighter(0.08) : Theme.honey)
+        : (touch.pressed ? Theme.pressed : touch.has-hover && root.enabled ? Theme.hover : transparent);
+    border-width: root.primary ? 0 : 1px;
+    border-color: Theme.border;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    layout := HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 6px;
+        alignment: center;
+
+        if root.has-icon: VerticalLayout {
+            alignment: center;
+            Icon {
+                source: root.icon;
+                width: 14px;
+                height: 14px;
+                tint: root.primary ? Theme.on-honey : root.danger ? Theme.danger : Theme.text;
+            }
+        }
+        Text {
+            text: root.text;
+            vertical-alignment: center;
+            font-size: Theme.body;
+            font-weight: root.primary ? 600 : 400;
+            color: root.primary ? Theme.on-honey : root.danger ? Theme.danger : Theme.text;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Avatar inherits Rectangle {
+    in property <string> initials;
+    in property <color> tint;
+    in property <length> size: 20px;
+
+    width: root.size;
+    height: root.size;
+    border-radius: root.size / 2;
+    background: root.tint;
+
+    Text {
+        text: root.initials;
+        color: #ffffff;
+        font-size: root.size * 0.42;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// A rounded square with the item type's icon, used in headers.
+export component TypeTile inherits Rectangle {
+    in property <RowIcon> icon;
+    in property <length> size: 44px;
+
+    width: root.size;
+    height: root.size;
+    border-radius: root.size / 4;
+    background: Theme.type-color(root.icon).with-alpha(0.16);
+
+    Icon {
+        source: Icons.for-row(root.icon);
+        tint: Theme.type-color(root.icon);
+        width: root.size * 0.5;
+        height: root.size * 0.5;
+    }
+}
+
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in property <int> current;
+    callback picked(int);
+
+    height: 28px;
+    border-radius: 7px;
+    background: Theme.hover;
+    accessible-role: tab-list;
+
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+
+        for option[i] in root.options: Rectangle {
+            border-radius: 5px;
+            background: i == root.current ? Theme.surface : transparent;
+            drop-shadow-blur: i == root.current ? 2px : 0;
+            drop-shadow-color: #0000002a;
+            accessible-role: tab;
+            accessible-label: option;
+            accessible-item-selected: i == root.current;
+            accessible-action-default => { root.picked(i); }
+
+            Text {
+                text: option;
+                font-size: 12px;
+                font-weight: i == root.current ? 600 : 400;
+                color: i == root.current ? Theme.text : Theme.muted;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.picked(i); }
+            }
+        }
+    }
+}

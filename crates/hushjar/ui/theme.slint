@@ -1,0 +1,94 @@
+import { Palette } from "std-widgets.slint";
+import { RowIcon } from "types.slint";
+
+// Colours follow the system light or dark preference. The accent is honey.
+export global Theme {
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+
+    out property <color> window: dark ? #16171b : #f7f6f3;
+    out property <color> sidebar: dark ? #1c1d22 : #efede8;
+    out property <color> surface: dark ? #222329 : #ffffff;
+    out property <color> hover: dark ? #ffffff0f : #0000000a;
+    out property <color> pressed: dark ? #ffffff1a : #00000014;
+    out property <color> border: dark ? #ffffff17 : #0000001a;
+    out property <color> text: dark ? #ececef : #1d1c1a;
+    out property <color> muted: dark ? #a3a3ad : #66635d;
+    out property <color> faint: dark ? #7c7c86 : #8f8b83;
+    out property <color> honey: dark ? #f2b84b : #c9820f;
+    out property <color> honey-text: dark ? #f6c86f : #915a00;
+    out property <color> on-honey: #1d1c1a;
+    out property <color> selection: dark ? #f2b84b30 : #c9820f26;
+    out property <color> danger: dark ? #ff8a80 : #b3261e;
+
+    out property <color> login: dark ? #86b6ff : #2f6fdb;
+    out property <color> card: dark ? #7fd8a6 : #1d8f58;
+    out property <color> identity: dark ? #c6a2ff : #7b4fd6;
+    out property <color> note: dark ? #ffd36e : #a47400;
+    out property <color> ssh: dark ? #6fd6d6 : #10807f;
+
+    out property <length> radius: 8px;
+    out property <length> row-height: 30px;
+    out property <length> body: 13px;
+    out property <length> small: 11px;
+    out property <string> mono: "monospace";
+
+    public pure function type-color(icon: RowIcon) -> color {
+        if (icon == RowIcon.login) { return login; }
+        if (icon == RowIcon.card) { return card; }
+        if (icon == RowIcon.identity) { return identity; }
+        if (icon == RowIcon.note) { return note; }
+        if (icon == RowIcon.ssh-key) { return ssh; }
+        if (icon == RowIcon.favorites) { return honey; }
+        return muted;
+    }
+}
+
+export global Icons {
+    out property <image> chevron-right: @image-url("icons/chevron-right.svg");
+    out property <image> search: @image-url("icons/search.svg");
+    out property <image> close: @image-url("icons/close.svg");
+    out property <image> star: @image-url("icons/star.svg");
+    out property <image> star-filled: @image-url("icons/star-filled.svg");
+    out property <image> copy: @image-url("icons/copy.svg");
+    out property <image> eye: @image-url("icons/eye.svg");
+    out property <image> eye-off: @image-url("icons/eye-off.svg");
+    out property <image> external: @image-url("icons/external.svg");
+    out property <image> lock: @image-url("icons/lock.svg");
+    out property <image> plus: @image-url("icons/plus.svg");
+    out property <image> sync: @image-url("icons/sync.svg");
+    out property <image> settings: @image-url("icons/settings.svg");
+    out property <image> dice: @image-url("icons/dice.svg");
+    out property <image> send: @image-url("icons/send.svg");
+    out property <image> login: @image-url("icons/login.svg");
+    out property <image> card: @image-url("icons/card.svg");
+    out property <image> identity: @image-url("icons/identity.svg");
+    out property <image> note: @image-url("icons/note.svg");
+    out property <image> terminal: @image-url("icons/terminal.svg");
+    out property <image> folder: @image-url("icons/folder.svg");
+    out property <image> trash: @image-url("icons/trash.svg");
+    out property <image> archive: @image-url("icons/archive.svg");
+    out property <image> pencil: @image-url("icons/pencil.svg");
+    out property <image> collection: @image-url("icons/collection.svg");
+    out property <image> organization: @image-url("icons/organization.svg");
+    out property <image> types: @image-url("icons/types.svg");
+    out property <image> sidebar: @image-url("icons/sidebar.svg");
+    out property <image> check: @image-url("icons/check.svg");
+    out property <image> jar: @image-url("icons/jar.svg");
+
+    public pure function for-row(icon: RowIcon) -> image {
+        if (icon == RowIcon.favorites) { return star-filled; }
+        if (icon == RowIcon.folder || icon == RowIcon.no-folder) { return folder; }
+        if (icon == RowIcon.my-vault) { return jar; }
+        if (icon == RowIcon.organization) { return organization; }
+        if (icon == RowIcon.collection) { return collection; }
+        if (icon == RowIcon.types) { return types; }
+        if (icon == RowIcon.login) { return login; }
+        if (icon == RowIcon.card) { return card; }
+        if (icon == RowIcon.identity) { return identity; }
+        if (icon == RowIcon.note) { return note; }
+        if (icon == RowIcon.ssh-key) { return terminal; }
+        if (icon == RowIcon.archive) { return archive; }
+        if (icon == RowIcon.trash) { return trash; }
+        return folder;
+    }
+}

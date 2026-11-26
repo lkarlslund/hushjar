@@ -1,0 +1,645 @@
+import { ScrollView, LineEdit, TextEdit, Switch } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { Icon, IconButton, ActionButton, Avatar, TypeTile } from "widgets.slint";
+import {
+    AccountBadge, DetailField, DetailSection, FieldKind, GroupSummary, ItemHeader, PaneMode, RowIcon,
+} from "types.slint";
+
+// A read-only field with copy, show and open buttons.
+component FieldView inherits Rectangle {
+    in property <DetailField> field;
+    in property <int> totp-remaining;
+    in property <int> totp-period: 30;
+    callback copy();
+    callback open-url();
+    callback edit-request();
+
+    property <bool> revealed;
+    property <bool> hidden-value: root.field.kind == FieldKind.secret && !root.revealed;
+    property <bool> monospace: root.field.kind == FieldKind.secret || root.field.kind == FieldKind.totp;
+
+    min-height: 46px;
+    background: touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        double-clicked => { root.edit-request(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 10px;
+        padding-top: 7px;
+        padding-bottom: 7px;
+        spacing: 4px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: root.field.label;
+                font-size: Theme.small;
+                color: Theme.muted;
+            }
+            Text {
+                text: root.hidden-value ? "••••••••••••" : root.field.value;
+                font-size: root.field.kind == FieldKind.totp ? 16px : Theme.body;
+                font-family: root.monospace ? Theme.mono : "";
+                letter-spacing: root.field.kind == FieldKind.totp ? 1px : 0;
+                wrap: word-wrap;
+                color: root.field.kind == FieldKind.url ? Theme.honey-text : root.field.kind == FieldKind.info ? Theme.muted : Theme.text;
+                accessible-role: text;
+                accessible-label: root.field.label;
+            }
+            if root.field.kind == FieldKind.totp: Rectangle {
+                height: 3px;
+                width: 120px;
+                border-radius: 1.5px;
+                background: Theme.border;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * root.totp-remaining / root.totp-period;
+                    border-radius: 1.5px;
+                    background: root.totp-remaining <= 5 ? Theme.danger : Theme.honey;
+                    animate width { duration: 900ms; }
+                }
+            }
+        }
+
+        if root.field.kind == FieldKind.totp: Text {
+            text: root.totp-remaining + " s";
+            vertical-alignment: center;
+            font-size: Theme.small;
+            color: root.totp-remaining <= 5 ? Theme.danger : Theme.faint;
+        }
+        if root.field.kind == FieldKind.secret: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: root.revealed ? Icons.eye-off : Icons.eye;
+                label: root.revealed ? "Hide " + root.field.label : "Show " + root.field.label;
+                active: root.revealed;
+                clicked => { root.revealed = !root.revealed; }
+            }
+        }
+        if root.field.kind == FieldKind.url: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: Icons.external;
+                label: "Open " + root.field.value;
+                clicked => { root.open-url(); }
+            }
+        }
+        if root.field.copyable: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: Icons.copy;
+                label: "Copy " + root.field.label;
+                clicked => { root.copy(); }
+            }
+        }
+    }
+}
+
+// The same field while editing.
+component FieldEditor inherits Rectangle {
+    in property <DetailField> field;
+    callback edited(string);
+    callback label-edited(string);
+    callback generate();
+    callback remove();
+
+    property <bool> revealed;
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 10px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 6px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 4px;
+
+            if !root.field.label-editable: Text {
+                text: root.field.kind == FieldKind.totp ? root.field.label + " (secret key)" : root.field.label;
+                font-size: Theme.small;
+                color: Theme.muted;
+            }
+            if root.field.label-editable: LineEdit {
+                text: root.field.label;
+                placeholder-text: "Field name";
+                font-size: Theme.small;
+                edited(text) => { root.label-edited(text); }
+            }
+
+            if root.field.kind == FieldKind.multiline: TextEdit {
+                text: root.field.value;
+                min-height: 96px;
+                wrap: word-wrap;
+                edited(text) => { root.edited(text); }
+            }
+            if root.field.kind == FieldKind.boolean: Switch {
+                checked: root.field.value == "true";
+                text: self.checked ? "On" : "Off";
+                toggled => { root.edited(self.checked ? "true" : "false"); }
+            }
+            if root.field.kind != FieldKind.multiline && root.field.kind != FieldKind.boolean: LineEdit {
+                text: root.field.value;
+                read-only: root.field.kind == FieldKind.info;
+                input-type: (root.field.kind == FieldKind.secret || root.field.kind == FieldKind.totp) && !root.revealed ? InputType.password : InputType.text;
+                font-size: Theme.body;
+                edited(text) => { root.edited(text); }
+            }
+        }
+
+        if root.field.kind == FieldKind.secret || root.field.kind == FieldKind.totp: VerticalLayout {
+            alignment: end;
+            IconButton {
+                icon: root.revealed ? Icons.eye-off : Icons.eye;
+                label: root.revealed ? "Hide value" : "Show value";
+                active: root.revealed;
+                clicked => { root.revealed = !root.revealed; }
+            }
+        }
+        if root.field.kind == FieldKind.secret: VerticalLayout {
+            alignment: end;
+            IconButton {
+                icon: Icons.dice;
+                label: "Generate a new " + root.field.label;
+                clicked => {
+                    root.revealed = true;
+                    root.generate();
+                }
+            }
+        }
+        if root.field.removable: VerticalLayout {
+            alignment: end;
+            IconButton {
+                icon: Icons.close;
+                label: "Remove " + root.field.label;
+                clicked => { root.remove(); }
+            }
+        }
+    }
+}
+
+component SectionCard inherits Rectangle {
+    in property <string> title;
+    in property <bool> editing;
+
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: root.editing ? Theme.honey.with-alpha(0.55) : Theme.border;
+    clip: true;
+
+    VerticalLayout {
+        padding-bottom: 4px;
+        HorizontalLayout {
+            padding-left: 16px;
+            Text {
+                text: root.title;
+                height: 30px;
+                vertical-alignment: bottom;
+                font-size: Theme.small;
+                font-weight: 600;
+                color: Theme.muted;
+            }
+        }
+        @children
+    }
+}
+
+component Banner inherits Rectangle {
+    in property <string> text;
+    in property <color> tone: Theme.honey;
+
+    background: root.tone.with-alpha(0.14);
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: root.tone.with-alpha(0.4);
+    min-height: 44px;
+
+    HorizontalLayout {
+        padding: 8px;
+        padding-left: 14px;
+        spacing: 8px;
+        Text {
+            text: root.text;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            color: Theme.text;
+        }
+        @children
+    }
+}
+
+export component DetailsPane inherits Rectangle {
+    in property <PaneMode> mode;
+    in property <ItemHeader> header;
+    in property <[DetailSection]> sections;
+    in property <bool> editing;
+    in property <bool> dirty;
+    in property <bool> leave-pending;
+    in property <int> totp-remaining;
+    in property <[string]> folders;
+    in property <int> folder-index;
+    in property <AccountBadge> account;
+    in property <string> unlock-error;
+    in property <GroupSummary> group;
+
+    callback copy-field(int, int);
+    callback open-url(string);
+    callback begin-edit();
+    callback save();
+    callback cancel();
+    callback discard-and-leave();
+    callback keep-editing();
+    callback save-and-leave();
+    callback edit-field(int, int, string);
+    callback edit-label(int, int, string);
+    callback edit-name(string);
+    callback toggle-favorite();
+    callback pick-folder(int);
+    callback generate(int, int);
+    callback add-field(int);
+    callback remove-field(int, int);
+    callback delete-item();
+    callback restore-item();
+    callback unlock(string);
+
+    // Bump this to move keyboard focus into the unlock field.
+    in property <int> unlock-focus-request;
+
+    background: Theme.window;
+
+    // Empty state
+    if root.mode == PaneMode.empty: VerticalLayout {
+        alignment: center;
+        spacing: 10px;
+        HorizontalLayout {
+            alignment: center;
+            Icon { source: Icons.jar; width: 56px; height: 56px; tint: Theme.honey.with-alpha(0.7); }
+        }
+        Text {
+            text: "Pick something on the left";
+            horizontal-alignment: center;
+            font-size: 15px;
+            color: Theme.text;
+        }
+        Text {
+            text: "Ctrl+F filters · arrow keys move · Ctrl+N adds an item";
+            horizontal-alignment: center;
+            font-size: Theme.small;
+            color: Theme.muted;
+        }
+    }
+
+    // A folder, collection or account summary
+    if root.mode == PaneMode.group: VerticalLayout {
+        alignment: center;
+        spacing: 10px;
+        HorizontalLayout {
+            alignment: center;
+            TypeTile { icon: root.group.icon; size: 56px; }
+        }
+        Text {
+            text: root.group.title;
+            horizontal-alignment: center;
+            font-size: 18px;
+            font-weight: 600;
+            color: Theme.text;
+        }
+        Text {
+            text: (root.group.path != "" ? root.group.path + " · " : "") + (root.group.count == 1 ? "1 item" : root.group.count + " items");
+            horizontal-alignment: center;
+            font-size: Theme.body;
+            color: Theme.muted;
+        }
+    }
+
+    // Unlock form for a locked account
+    if root.mode == PaneMode.locked: VerticalLayout {
+        alignment: center;
+        spacing: 10px;
+        HorizontalLayout {
+            alignment: center;
+            Avatar { initials: root.account.initials; tint: root.account.tint; size: 52px; }
+        }
+        Text {
+            text: root.account.email;
+            horizontal-alignment: center;
+            font-size: 16px;
+            font-weight: 600;
+            color: Theme.text;
+        }
+        Text {
+            text: root.account.server + " · locked";
+            horizontal-alignment: center;
+            font-size: Theme.small;
+            color: Theme.muted;
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            unlock-field := LineEdit {
+                property <int> focus-request: root.unlock-focus-request;
+                changed focus-request => { self.focus(); }
+                width: 260px;
+                input-type: InputType.password;
+                placeholder-text: "Master password";
+                accepted(text) => {
+                    root.unlock(text);
+                    self.text = "";
+                }
+            }
+            ActionButton {
+                text: "Unlock";
+                primary: true;
+                has-icon: true;
+                icon: Icons.lock;
+                clicked => {
+                    root.unlock(unlock-field.text);
+                    unlock-field.text = "";
+                }
+            }
+        }
+        if root.unlock-error != "": Text {
+            text: root.unlock-error;
+            horizontal-alignment: center;
+            font-size: Theme.small;
+            color: Theme.danger;
+        }
+    }
+
+    // An item
+    if root.mode == PaneMode.item: VerticalLayout {
+        ScrollView {
+            vertical-stretch: 1;
+
+            HorizontalLayout {
+                alignment: center;
+                padding: 18px;
+                padding-top: 16px;
+
+                VerticalLayout {
+                    max-width: 760px;
+                    min-width: 280px;
+                    horizontal-stretch: 1;
+                    spacing: 12px;
+
+                    // Header
+                    HorizontalLayout {
+                        spacing: 12px;
+
+                        VerticalLayout {
+                            alignment: start;
+                            TypeTile { icon: root.header.icon; }
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: 3px;
+
+                            if !root.editing: Text {
+                                text: root.header.name;
+                                font-size: 20px;
+                                font-weight: 600;
+                                wrap: word-wrap;
+                                color: Theme.text;
+                            }
+                            if root.editing: LineEdit {
+                                text: root.header.name;
+                                placeholder-text: "Name";
+                                font-size: 16px;
+                                edited(text) => { root.edit-name(text); }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: root.header.path;
+                                    vertical-alignment: center;
+                                    font-size: Theme.small;
+                                    color: Theme.muted;
+                                    overflow: elide;
+                                }
+                                if root.editing: Rectangle {
+                                    height: 18px;
+                                    width: editing-label.preferred-width + 14px;
+                                    border-radius: 9px;
+                                    background: Theme.honey.with-alpha(0.2);
+                                    editing-label := Text {
+                                        text: root.header.is-new ? "New item" : "Editing";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.honey-text;
+                                    }
+                                }
+                                if root.header.deleted: Rectangle {
+                                    height: 18px;
+                                    width: trash-label.preferred-width + 14px;
+                                    border-radius: 9px;
+                                    background: Theme.danger.with-alpha(0.15);
+                                    trash-label := Text {
+                                        text: "In trash";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.danger;
+                                    }
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: start;
+                            HorizontalLayout {
+                                spacing: 4px;
+                                IconButton {
+                                    icon: root.header.favorite ? Icons.star-filled : Icons.star;
+                                    label: root.header.favorite ? "Remove from favourites" : "Add to favourites";
+                                    tint: root.header.favorite ? Theme.honey : Theme.muted;
+                                    size: 30px;
+                                    clicked => { root.toggle-favorite(); }
+                                }
+                                if !root.editing && !root.header.deleted: ActionButton {
+                                    text: "Edit";
+                                    has-icon: true;
+                                    icon: Icons.pencil;
+                                    clicked => { root.begin-edit(); }
+                                }
+                                if !root.editing && root.header.deleted: ActionButton {
+                                    text: "Restore";
+                                    clicked => { root.restore-item(); }
+                                }
+                                if !root.editing: IconButton {
+                                    icon: Icons.trash;
+                                    label: root.header.deleted ? "Delete permanently" : "Move to trash";
+                                    size: 30px;
+                                    clicked => { root.delete-item(); }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.editing: HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "Folder";
+                            vertical-alignment: center;
+                            font-size: Theme.small;
+                            color: Theme.muted;
+                        }
+                        folder-box := Rectangle {
+                            height: 30px;
+                            horizontal-stretch: 1;
+                            HorizontalLayout {
+                                spacing: 4px;
+                                for name[i] in root.folders: Rectangle {
+                                    height: 26px;
+                                    width: folder-text.preferred-width + 18px;
+                                    border-radius: 13px;
+                                    background: i == root.folder-index ? Theme.selection : folder-touch.has-hover ? Theme.hover : transparent;
+                                    border-width: 1px;
+                                    border-color: i == root.folder-index ? Theme.honey.with-alpha(0.6) : Theme.border;
+                                    accessible-role: radio-button;
+                                    accessible-label: name;
+                                    accessible-checked: i == root.folder-index;
+                                    accessible-action-default => { root.pick-folder(i); }
+                                    folder-text := Text {
+                                        text: name;
+                                        font-size: Theme.small;
+                                        color: i == root.folder-index ? Theme.honey-text : Theme.muted;
+                                    }
+                                    folder-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.pick-folder(i); }
+                                    }
+                                }
+                                Rectangle {}
+                            }
+                        }
+                    }
+
+                    for section[si] in root.sections: SectionCard {
+                        title: section.title;
+                        editing: root.editing;
+
+                        for field[fi] in section.fields: VerticalLayout {
+                            if fi > 0: HorizontalLayout {
+                                padding-left: 16px;
+                                Rectangle {
+                                    height: 1px;
+                                    background: Theme.border;
+                                }
+                            }
+                            if !root.editing: FieldView {
+                                field: field;
+                                totp-remaining: root.totp-remaining;
+                                copy => { root.copy-field(si, fi); }
+                                open-url => { root.open-url(field.value); }
+                                edit-request => { root.begin-edit(); }
+                            }
+                            if root.editing: FieldEditor {
+                                field: field;
+                                edited(text) => { root.edit-field(si, fi, text); }
+                                label-edited(text) => { root.edit-label(si, fi, text); }
+                                generate => { root.generate(si, fi); }
+                                remove => { root.remove-field(si, fi); }
+                            }
+                        }
+
+                        if root.editing && section.add-label != "": HorizontalLayout {
+                            padding-left: 10px;
+                            padding-bottom: 6px;
+                            padding-top: 2px;
+                            alignment: start;
+                            ActionButton {
+                                text: section.add-label;
+                                has-icon: true;
+                                icon: Icons.plus;
+                                clicked => { root.add-field(si); }
+                            }
+                        }
+                    }
+
+                    if !root.editing: Text {
+                        text: "Double-click a field or press Ctrl+E to edit";
+                        horizontal-alignment: center;
+                        font-size: Theme.small;
+                        color: Theme.faint;
+                    }
+                }
+            }
+        }
+
+        // Bottom bar while editing
+        if root.editing: Rectangle {
+            height: root.leave-pending ? 60px : 52px;
+            background: Theme.sidebar;
+
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: Theme.border;
+            }
+
+            if !root.leave-pending: HorizontalLayout {
+                padding-left: 18px;
+                padding-right: 18px;
+                spacing: 8px;
+                alignment: end;
+                Text {
+                    text: "Ctrl+S to save · Esc to cancel";
+                    vertical-alignment: center;
+                    font-size: Theme.small;
+                    color: Theme.faint;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        text: "Cancel";
+                        clicked => { root.cancel(); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        text: "Save";
+                        primary: true;
+                        has-icon: true;
+                        icon: Icons.check;
+                        enabled: root.dirty;
+                        clicked => { root.save(); }
+                    }
+                }
+            }
+
+            if root.leave-pending: HorizontalLayout {
+                padding: 8px;
+                padding-left: 18px;
+                padding-right: 18px;
+                Banner {
+                    text: "You have unsaved changes to this item.";
+                    VerticalLayout {
+                        alignment: center;
+                        ActionButton { text: "Keep editing"; clicked => { root.keep-editing(); } }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        ActionButton { text: "Discard"; danger: true; clicked => { root.discard-and-leave(); } }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        ActionButton { text: "Save"; primary: true; clicked => { root.save-and-leave(); } }
+                    }
+                }
+            }
+        }
+    }
+}
