@@ -8,3 +8,27 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# 0.7 is still a release candidate, but it is the line built on the same
+# RustCrypto generation as the rest of the workspace (rsa 0.10, sha2 0.11,
+# rand_core 0.10). The stable 0.6 line would pull in rsa 0.9 and sha2 0.10 as
+# well. Pinned exactly because release candidates may break between versions.
+ssh-key = { version = "=0.7.0-rc.12", default-features = false, features = ["std", "ed25519", "p256", "p384", "p521", "rsa"] }
+# ssh-key turns off rsa's default features. "getrandom" makes RSA signing use
+# blinding; without it rsa signs unblinded.
+rsa = { version = "0.10.0", default-features = false, features = ["std", "getrandom"] }
+signature = "3.0.0"
+thiserror = "2.0.21"
+zeroize = "1.9.2"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+rustix = { version = "1.1.6", features = ["event", "fs", "net", "process"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nix = { version = "0.31.4", default-features = false, features = ["socket", "user"] }
+
+[dev-dependencies]
+getrandom = { version = "0.4", features = ["sys_rng"] }
+# Only to make a passphrase-protected key in a test.
+ssh-key = { version = "=0.7.0-rc.12", default-features = false, features = ["encryption"] }
