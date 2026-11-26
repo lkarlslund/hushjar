@@ -6,7 +6,11 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
     let Some(index) = st.borrow().account_index(id) else {
         return;
     };
+    if matches!(event, Event::SaveUncertain { .. }) && st.borrow().shown == Shown::Sends {
+        sends::save_uncertain(win, st, index);
+    }
     match event {
+        Event::SendSaved { send, vault, link } => sends::saved(win, st, index, *send, vault, link),
         Event::Unlocked { vault, synced_at } | Event::Synced { vault, synced_at } => {
             let first_unlock;
             {

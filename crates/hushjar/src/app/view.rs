@@ -153,6 +153,9 @@ pub(super) fn account_summary(a: &AccountState) -> AccountSummary {
 pub(super) fn render(win: &AppWindow, st: &Shared) {
     let shown = st.borrow().shown.clone();
     let editing = st.borrow().editing_shown();
+    if shown != Shown::Sends && st.borrow().sends.has_draft() {
+        forget_sends(win, st);
+    }
     win.set_editing(editing);
     win.set_leave_pending(st.borrow().pending.is_some());
     win.set_dirty(st.borrow().draft.as_ref().is_some_and(Draft::dirty));
@@ -162,6 +165,10 @@ pub(super) fn render(win: &AppWindow, st: &Shared) {
         Shown::Generator => {
             render_generator(win, st);
             win.set_mode(PaneMode::Generator);
+        }
+        Shown::Sends => {
+            render_sends(win, st);
+            win.set_mode(PaneMode::Sends);
         }
         Shown::Settings => {
             render_settings(win, st);

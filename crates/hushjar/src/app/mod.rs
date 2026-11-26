@@ -25,6 +25,7 @@ mod edit;
 mod events;
 mod generator;
 mod integration;
+mod sends;
 mod settings;
 mod sign_in;
 mod ssh;
@@ -35,6 +36,7 @@ use edit::*;
 use events::*;
 use generator::{Generator, render_generator, show_generator, wire_generator};
 use integration::Integration;
+use sends::{Sends, forget_sends, render_sends, show_sends, wire_sends};
 use settings::*;
 use sign_in::*;
 use ssh::*;
@@ -56,6 +58,7 @@ enum Shown {
     SignIn,
     Settings,
     Generator,
+    Sends,
 }
 
 struct Draft {
@@ -80,6 +83,7 @@ enum Pending {
     NewItem,
     Settings,
     Generator,
+    Sends,
 }
 
 struct AccountState {
@@ -147,6 +151,7 @@ pub struct State {
     system_scheme: slint::language::ColorScheme,
     desktop: Integration,
     generator: Generator,
+    sends: Sends,
 }
 
 type Shared = Rc<RefCell<State>>;
@@ -384,6 +389,7 @@ impl App {
             system_scheme,
             desktop: Integration::new(),
             generator,
+            sends: Sends::default(),
         }));
         CONTEXT.with(|c| *c.borrow_mut() = Some((window.as_weak(), state.clone())));
         window.set_rows(ModelRc::from(state.borrow().rows_model.clone()));
@@ -397,6 +403,7 @@ impl App {
         wire(&app.window, &state);
         wire_settings(&app.window, &state);
         wire_generator(&app.window, &state);
+        wire_sends(&app.window, &state);
         apply_prefs(&app.window, &state);
         refresh_tree(&app.window, &state);
         let first = state

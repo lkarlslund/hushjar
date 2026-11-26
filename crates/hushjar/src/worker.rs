@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use hushjar_core::api::{SecondFactor, Server, TwoFactorProvider};
+use hushjar_core::send::SendEntry;
 use hushjar_core::session::{Session, SessionError};
 use hushjar_core::store::{Profile, Store};
 use hushjar_core::vault::{Item, Vault};
@@ -40,6 +41,22 @@ pub enum Command {
     /// Locks and forgets the session and offline copy.
     LogOut,
     Remove,
+    /// Saves a text Send, or the settings of a file Send. A new Send is
+    /// posted once and never retried. `remove_password` clears the access
+    /// password after the save.
+    SaveSend {
+        send: Box<SendEntry>,
+        password: Option<Zeroizing<String>>,
+        remove_password: bool,
+    },
+    /// Creates a file Send and uploads the file.
+    CreateFileSend {
+        send: Box<SendEntry>,
+        file_name: String,
+        bytes: Zeroizing<Vec<u8>>,
+        password: Option<Zeroizing<String>>,
+    },
+    DeleteSend(String),
 }
 
 /// What happened, for the UI. `vault` copies are the decrypted state after
@@ -83,6 +100,12 @@ pub enum Event {
     },
     Locked,
     Removed,
+    /// A Send was saved. `link` is its share link (it carries the key).
+    SendSaved {
+        send: Box<SendEntry>,
+        vault: Vault,
+        link: Option<Zeroizing<String>>,
+    },
 }
 
 pub struct Worker {
@@ -327,6 +350,44 @@ fn run(
                 }
                 emit(Event::Locked);
             }
+            Command::SaveSend {
+                send,
+                password,
+                remove_password,
+            } => {
+                let Some(s) = session.as_mut() else { continue };
+                let result = s
+                    .save_send(&store, &send, password.as_ref().map(|p| p.as_str()))
+                    .and_then(|saved| {
+                        if remove_password && password.is_none() && saved.has_password {
+                            s.remove_send_password(&store, &saved.id)
+                        } else {
+                            Ok(saved)
+                        }
+                    });
+                finish_send(s, &store, &emit, result);
+            }
+            Command::CreateFileSend {
+                send,
+                file_name,
+                bytes,
+                password,
+            } => {
+                let Some(s) = session.as_mut() else { continue };
+                let result = s.create_file_send(
+                    &store,
+                    &send,
+                    &file_name,
+                    &bytes,
+                    password.as_ref().map(|p| p.as_str()),
+                );
+                finish_send(s, &store, &emit, result);
+            }
+            Command::DeleteSend(id) => {
+                change(&mut session, &store, &emit, "Send deleted", |s, st| {
+                    s.delete_send(st, &id)
+                })
+            }
             Command::Remove => {
                 drop(session.take());
                 if let Some(p) = &profile {
@@ -352,6 +413,39 @@ fn change(
             vault: s.vault.clone(),
             message: message.into(),
         }),
+        Err(SessionError::SignInRequired) => emit(Event::NeedsSignIn { two_factor: vec![] }),
+        Err(e) => emit(Event::Failed {
+            message: describe(&e),
+        }),
+    }
+}
+
+/// Reports the result of saving a Send. A lost reply is not retried: the
+/// vault is synced so the list shows whether the Send arrived.
+fn finish_send(
+    s: &mut Session,
+    store: &Store,
+    emit: &dyn Fn(Event),
+    result: Result<SendEntry, SessionError>,
+) {
+    match result {
+        Ok(saved) => {
+            let link = s.send_link(&saved).map(Zeroizing::new);
+            emit(Event::SendSaved {
+                send: Box::new(saved),
+                vault: s.vault.clone(),
+                link,
+            });
+        }
+        Err(SessionError::SaveUncertain) => {
+            let message = describe(&SessionError::SaveUncertain);
+            let _ = s.sync(store);
+            emit(Event::SaveUncertain { message });
+            emit(Event::Synced {
+                vault: s.vault.clone(),
+                synced_at: s.synced_at,
+            });
+        }
         Err(SessionError::SignInRequired) => emit(Event::NeedsSignIn { two_factor: vec![] }),
         Err(e) => emit(Event::Failed {
             message: describe(&e),
