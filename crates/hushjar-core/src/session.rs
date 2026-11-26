@@ -9,9 +9,11 @@ use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 use crate::api::{
-    ApiError, Client, Device, SecondFactor, Server, TwoFactorProvider, field, field_str,
+    ApiError, Client, Device, FileUpload, MAX_FILE_BYTES, SecondFactor, Server, TwoFactorProvider,
+    field, field_str,
 };
-use crate::crypto::{self, CryptoError, HashPurpose, PrivateKey};
+use crate::crypto::{self, CryptoError, HashPurpose, PrivateKey, SymmetricKey};
+use crate::send::{self, SendEntry, SendFile, SendKind};
 use crate::store::{Profile, Store};
 use crate::vault::{self, Item, Keys, Vault, VaultError};
 
@@ -37,6 +39,10 @@ pub enum SessionError {
     SaveUncertain,
     #[error("this item is read-only for your account")]
     ReadOnly,
+    #[error("it is no longer in this vault; sync and try again")]
+    NotFound,
+    #[error("the file is larger than the 500 MiB Bitwarden allows")]
+    FileTooLarge,
 }
 
 impl From<ApiError> for SessionError {
@@ -429,5 +435,295 @@ impl Session {
         let id = field_str(&reply, "id").unwrap_or_default().to_string();
         self.sync(store)?;
         Ok(id)
+    }
+
+    /// Downloads an attachment and decrypts it.
+    ///
+    /// The server is asked for a fresh download address (it expires), which
+    /// is fetched without the access token. The contents are opened with
+    /// the attachment's own key, unwrapped with the item key; attachments
+    /// from before per-file keys are opened with the account or
+    /// organisation key, as the Bitwarden clients do
+    /// (`getDecryptedAttachmentBuffer` in libs/common/src/vault/services/
+    /// cipher.service.ts).
+    pub fn download_attachment(
+        &mut self,
+        item_id: &str,
+        attachment_id: &str,
+    ) -> Result<Zeroizing<Vec<u8>>, SessionError> {
+        let raw = self
+            .vault
+            .item(item_id)
+            .ok_or(SessionError::NotFound)?
+            .raw
+            .clone();
+        let info = self.with_token(|c, t| c.attachment_info(t, item_id, attachment_id))?;
+        let url = field_str(&info, "url").ok_or(ApiError::Decode)?.to_string();
+        let wrapped = field_str(&info, "key").map(str::to_string).or_else(|| {
+            field(&raw, "attachments")
+                .and_then(Value::as_array)?
+                .iter()
+                .find(|a| field_str(a, "id") == Some(attachment_id))
+                .and_then(|a| field_str(a, "key"))
+                .map(str::to_string)
+        });
+        let key = match wrapped {
+            Some(wrapped) => vault::item_key(&raw, &self.keys)
+                .ok_or(VaultError::MissingKey)?
+                .unwrap_key(&wrapped)?,
+            None => self
+                .keys
+                .owner(field_str(&raw, "organizationId"))
+                .ok_or(VaultError::MissingKey)?
+                .clone(),
+        };
+        let encrypted = self.client.download(&url)?;
+        Ok(key.decrypt_buffer(&encrypted)?)
+    }
+
+    /// Attaches a file to an item and returns the item as stored after.
+    ///
+    /// A new 64-byte attachment key encrypts the contents and is wrapped
+    /// with the item key (or the account or organisation key for items
+    /// without one); the file name is encrypted with that same item key,
+    /// as in the Bitwarden clients' `saveAttachmentRawWithServer`. The
+    /// attachment is registered, then uploaded; if the upload fails the
+    /// registration is deleted again.
+    pub fn add_attachment(
+        &mut self,
+        store: &Store,
+        item_id: &str,
+        file_name: &str,
+        bytes: &[u8],
+    ) -> Result<Item, SessionError> {
+        if bytes.len() > MAX_FILE_BYTES {
+            return Err(SessionError::FileTooLarge);
+        }
+        let item = self.vault.item(item_id).ok_or(SessionError::NotFound)?;
+        if !item.editable {
+            return Err(SessionError::ReadOnly);
+        }
+        let raw = item.raw.clone();
+        let item_key = vault::item_key(&raw, &self.keys).ok_or(VaultError::MissingKey)?;
+        let attachment_key = SymmetricKey::generate();
+        let encrypted_name = item_key.encrypt_str(file_name);
+        let data = attachment_key.encrypt_buffer(bytes);
+        let mut body = json!({
+            "key": item_key.wrap_key(&attachment_key),
+            "fileName": encrypted_name,
+            "fileSize": data.len(),
+            "adminRequest": false,
+        });
+        if let Some(revision) = field_str(&raw, "revisionDate") {
+            body["lastKnownRevisionDate"] = json!(revision);
+        }
+        let reply = self.with_token(|c, t| c.create_attachment(t, item_id, &body))?;
+        let attachment_id = field_str(&reply, "attachmentId")
+            .ok_or(ApiError::Decode)?
+            .to_string();
+        let uploaded = self.token().and_then(|token| {
+            let target = FileUpload::from_reply(&reply)?;
+            Ok(match target {
+                FileUpload::Direct => self.client.upload_attachment(
+                    &token,
+                    item_id,
+                    &attachment_id,
+                    &encrypted_name,
+                    &data,
+                ),
+                FileUpload::Azure(url) => self.client.upload_azure(&url, &data),
+            }?)
+        });
+        if let Err(error) = uploaded {
+            // Best effort: do not leave an attachment without contents.
+            let _ = self.with_token(|c, t| c.delete_attachment(t, item_id, &attachment_id));
+            return Err(error);
+        }
+        self.sync(store)?;
+        self.vault
+            .item(item_id)
+            .cloned()
+            .ok_or(SessionError::NotFound)
+    }
+
+    /// Deletes an attachment from an item.
+    pub fn delete_attachment(
+        &mut self,
+        store: &Store,
+        item_id: &str,
+        attachment_id: &str,
+    ) -> Result<(), SessionError> {
+        self.with_token(|c, t| c.delete_attachment(t, item_id, attachment_id))?;
+        self.sync(store)
+    }
+
+    /// The share link for a saved Send, or `None` if it has no access id
+    /// yet or its key could not be decrypted.
+    pub fn send_link(&self, send: &SendEntry) -> Option<String> {
+        if send.access_id.is_empty() {
+            return None;
+        }
+        let key = send.key.as_ref()?;
+        Some(
+            self.profile
+                .server
+                .send_link(&send.access_id, key.material()),
+        )
+    }
+
+    /// Replaces or adds one Send in the stored sync data and the vault.
+    fn apply_send(&mut self, store: &Store, raw: Value) -> Result<SendEntry, SessionError> {
+        let id = field_str(&raw, "id").unwrap_or_default().to_string();
+        if let Some(sync) = self.sync.as_object_mut() {
+            let key = sync
+                .keys()
+                .find(|k| k.eq_ignore_ascii_case("sends"))
+                .cloned()
+                .unwrap_or_else(|| "sends".into());
+            let list = sync.entry(key).or_insert_with(|| json!([]));
+            if let Some(list) = list.as_array_mut() {
+                match list
+                    .iter_mut()
+                    .find(|s| field_str(s, "id") == Some(id.as_str()))
+                {
+                    Some(slot) => *slot = raw.clone(),
+                    None => list.push(raw.clone()),
+                }
+            }
+        }
+        let entry = send::decrypt_send(&raw, &self.keys.user);
+        match self.vault.sends.iter_mut().find(|s| s.id == id) {
+            Some(slot) => *slot = entry.clone(),
+            None => self.vault.sends.push(entry.clone()),
+        }
+        self.persist(store)?;
+        Ok(entry)
+    }
+
+    /// Saves a new or edited text Send, or edits a file Send's settings,
+    /// and returns the server's copy. `password` sets a new access
+    /// password; `None` keeps the current one (see
+    /// [`Session::remove_send_password`]).
+    ///
+    /// Like [`Session::save`], a new Send is posted once: a lost reply gives
+    /// [`SessionError::SaveUncertain`]. New file Sends use
+    /// [`Session::create_file_send`].
+    pub fn save_send(
+        &mut self,
+        store: &Store,
+        send: &SendEntry,
+        password: Option<&str>,
+    ) -> Result<SendEntry, SessionError> {
+        let body = send::encrypt_send(send, &self.keys.user, password)?;
+        let reply = if send.is_new() {
+            if send.kind != SendKind::Text {
+                return Err(VaultError::ReadOnlyType.into());
+            }
+            let token = self.token()?;
+            match self.client.create_send(&token, &body) {
+                Ok(reply) => reply,
+                Err(ApiError::Network(_)) | Err(ApiError::Decode) => {
+                    return Err(SessionError::SaveUncertain);
+                }
+                Err(other) => return Err(other.into()),
+            }
+        } else {
+            let id = send.id.clone();
+            self.with_token(|c, t| c.update_send(t, &id, &body))?
+        };
+        self.apply_send(store, reply)
+    }
+
+    /// Creates a file Send: registers it with the encrypted file's length,
+    /// then uploads the file encrypted with the Send's key. If the upload
+    /// fails, the Send is deleted again. Returns the server's copy.
+    pub fn create_file_send(
+        &mut self,
+        store: &Store,
+        send: &SendEntry,
+        file_name: &str,
+        bytes: &[u8],
+        password: Option<&str>,
+    ) -> Result<SendEntry, SessionError> {
+        if bytes.len() > MAX_FILE_BYTES {
+            return Err(SessionError::FileTooLarge);
+        }
+        if !send.is_new() || send.kind != SendKind::File {
+            return Err(VaultError::ReadOnlyType.into());
+        }
+        let mut send = send.clone();
+        send.file = Some(SendFile {
+            id: String::new(),
+            file_name: file_name.to_string(),
+            size: 0,
+            size_name: String::new(),
+        });
+        let mut body = send::encrypt_send(&send, &self.keys.user, password)?;
+        let key = send
+            .key
+            .as_ref()
+            .ok_or(VaultError::MissingKey)?
+            .cipher_key();
+        let data = key.encrypt_buffer(bytes);
+        body["fileLength"] = json!(data.len());
+        let encrypted_name = body["file"]["fileName"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let token = self.token()?;
+        let reply = match self.client.create_file_send(&token, &body) {
+            Ok(reply) => reply,
+            Err(ApiError::Network(_)) | Err(ApiError::Decode) => {
+                return Err(SessionError::SaveUncertain);
+            }
+            Err(other) => return Err(other.into()),
+        };
+        let created = field(&reply, "sendResponse")
+            .cloned()
+            .ok_or(ApiError::Decode)?;
+        let send_id = field_str(&created, "id")
+            .ok_or(ApiError::Decode)?
+            .to_string();
+        let file_id = field(&created, "file")
+            .and_then(|f| field_str(f, "id"))
+            .ok_or(ApiError::Decode)?
+            .to_string();
+        let uploaded = FileUpload::from_reply(&reply).and_then(|target| match target {
+            FileUpload::Direct => {
+                self.client
+                    .upload_send_file(&token, &send_id, &file_id, &encrypted_name, &data)
+            }
+            FileUpload::Azure(url) => self.client.upload_azure(&url, &data),
+        });
+        if let Err(error) = uploaded {
+            let _ = self.with_token(|c, t| c.delete_send(t, &send_id));
+            return Err(error.into());
+        }
+        self.apply_send(store, created)
+    }
+
+    /// Clears a Send's access password.
+    pub fn remove_send_password(
+        &mut self,
+        store: &Store,
+        id: &str,
+    ) -> Result<SendEntry, SessionError> {
+        let reply = self.with_token(|c, t| c.remove_send_password(t, id))?;
+        self.apply_send(store, reply)
+    }
+
+    /// Deletes a Send at once, before its deletion date.
+    pub fn delete_send(&mut self, store: &Store, id: &str) -> Result<(), SessionError> {
+        self.with_token(|c, t| c.delete_send(t, id))?;
+        if let Some(list) = self
+            .sync
+            .as_object_mut()
+            .and_then(|o| o.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("sends")))
+            .and_then(|(_, v)| v.as_array_mut())
+        {
+            list.retain(|s| field_str(s, "id") != Some(id));
+        }
+        self.vault.sends.retain(|s| s.id != id);
+        self.persist(store)
     }
 }
