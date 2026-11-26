@@ -11,14 +11,12 @@
 //! Callbacks passed to these modules run on background threads. The app
 //! forwards them to the UI with `slint::invoke_from_event_loop`.
 
-#![allow(
-    dead_code,
-    reason = "building blocks that the app wires in step by step"
-)]
-
 pub mod autostart;
+#[allow(dead_code, reason = "a complete API; the app uses part of it so far")]
 pub mod notify;
+#[allow(dead_code, reason = "a complete API; the app uses part of it so far")]
 pub mod session_watch;
+#[allow(dead_code, reason = "a complete API; the app uses part of it so far")]
 pub mod sysauth;
 pub mod tray;
 
@@ -26,6 +24,10 @@ pub mod tray;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// This platform has no implementation yet.
+    #[cfg_attr(
+        target_os = "linux",
+        allow(dead_code, reason = "used by the other platforms")
+    )]
     #[error("not supported on this platform")]
     Unsupported,
     /// The desktop service needed for this is not running or not installed.

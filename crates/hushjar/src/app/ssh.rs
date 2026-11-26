@@ -132,4 +132,6 @@ pub(super) fn render_prompt(win: &AppWindow, st: &Shared) {
         .map(|p| p.text.clone())
         .unwrap_or_default();
     win.set_ssh_prompt(text.into());
+    sync_prompt_note(win, st);
+    update_tray_status(st);
 }

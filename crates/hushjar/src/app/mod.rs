@@ -34,7 +34,7 @@ mod wire;
 use edit::*;
 use events::*;
 use generator::{Generator, render_generator, show_generator, wire_generator};
-use integration::Integration;
+use integration::{Integration, close_requested, sync_prompt_note, update_tray_status};
 use settings::*;
 use sign_in::*;
 use ssh::*;
@@ -397,6 +397,13 @@ impl App {
         wire(&app.window, &state);
         wire_settings(&app.window, &state);
         wire_generator(&app.window, &state);
+        {
+            let st = state.clone();
+            app.window
+                .window()
+                .on_close_requested(move || close_requested(&st));
+        }
+        update_tray_status(&state);
         apply_prefs(&app.window, &state);
         refresh_tree(&app.window, &state);
         let first = state
@@ -451,6 +458,27 @@ impl App {
         Ok(Self {
             _timers: vec![ticker],
             ..app
+        })
+    }
+}
+
+impl App {
+    /// Whether the tray is up and the user wants to start there.
+    /// Records that the window starts hidden in the tray.
+    pub fn note_hidden(&self) {
+        CONTEXT.with(|c| {
+            if let Some((_, st)) = c.borrow().as_ref() {
+                st.borrow_mut().desktop.window_shown(false);
+            }
+        });
+    }
+
+    pub fn starts_in_tray(&self) -> bool {
+        CONTEXT.with(|c| {
+            c.borrow().as_ref().is_some_and(|(_, st)| {
+                let st = st.borrow();
+                st.prefs.start_in_tray && st.desktop.tray_running()
+            })
         })
     }
 }
@@ -595,4 +623,5 @@ fn handle_event(win: &AppWindow, st: &Shared, id: &str, event: Event) {
         handle_account_event(win, st, id, event);
     }
     update_agent_keys(win, st);
+    update_tray_status(st);
 }

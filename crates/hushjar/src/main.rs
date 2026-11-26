@@ -61,6 +61,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _snapshots =
         std::env::var_os("HUSHJAR_SNAPSHOT_DIR").map(|dir| snapshot::run(&app.window, dir.into()));
 
-    app.window.run()?;
+    // Start in the tray only when there is a tray to come back from.
+    let hidden = desktop::autostart::started_hidden() && app.starts_in_tray();
+    if hidden {
+        app.note_hidden();
+    } else {
+        app.window.show()?;
+    }
+    slint::run_event_loop_until_quit()?;
     Ok(())
 }
