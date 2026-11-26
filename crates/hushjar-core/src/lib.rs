@@ -5,7 +5,10 @@
 
 pub mod api;
 pub mod crypto;
+pub mod fingerprint;
+pub mod generator;
 pub mod session;
 pub mod store;
 pub mod totp;
 pub mod vault;
+pub mod wordlist;
