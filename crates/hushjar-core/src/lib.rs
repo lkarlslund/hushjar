@@ -9,3 +9,4 @@ pub mod session;
 pub mod store;
 pub mod totp;
 pub mod vault;
+pub mod webauthn;

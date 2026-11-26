@@ -322,7 +322,7 @@ mod end_to_end {
         let server = Server::parse(&base).unwrap();
         let providers = match Session::sign_in(&store, server.clone(), &email, PASSWORD, None, None)
         {
-            Err(SessionError::TwoFactorRequired(p)) => p,
+            Err(SessionError::TwoFactorRequired(p)) => p.providers,
             other => panic!("expected two-step login, got {:?}", other.err()),
         };
         assert!(providers.contains(&TwoFactorProvider::Authenticator));
@@ -508,4 +508,426 @@ fn seed_demo_account() {
     }
     session.sync(&store).unwrap();
     println!("DEMO {email} / {password}");
+}
+
+/// Logging in with a device, approving it, and the other ways to unlock.
+mod sign_in_and_unlock {
+    use super::*;
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as B64;
+    use hushjar_core::session::{
+        DeviceLoginStatus, MAX_PIN_ATTEMPTS, Session, SessionError, request_public_key,
+    };
+    use hushjar_core::store::Store;
+    use hushjar_core::vault::{Item, ItemKind};
+
+    const PASSWORD: &str = "invented interop password";
+    const KDF: Kdf = Kdf::Pbkdf2 {
+        iterations: 600_000,
+    };
+
+    fn temp_store() -> (Store, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("hushjar-interop-{}", uuid::Uuid::new_v4().simple()));
+        (Store::open(dir.clone()).unwrap(), dir)
+    }
+
+    fn password_hash(email: &str) -> String {
+        let master = crypto::master_key(PASSWORD, email, KDF).unwrap();
+        crypto::password_hash(&master, PASSWORD, HashPurpose::Server).to_string()
+    }
+
+    /// Gives the account an RSA key pair, as Bitwarden clients do on first
+    /// login, and returns the public key as SubjectPublicKeyInfo DER.
+    fn add_key_pair(base: &str, token: &str, user_key: &SymmetricKey) -> Vec<u8> {
+        use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+        let private = rsa::PrivateKey::new(&mut getrandom::SysRng, 2048).unwrap();
+        let pkcs8 = private.to_pkcs8_der().unwrap();
+        let public = private
+            .to_public_key()
+            .to_public_key_der()
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        let response = ureq::post(format!("{base}/api/accounts/keys"))
+            .header("Authorization", &format!("Bearer {token}"))
+            .send_json(json!({
+                "publicKey": B64.encode(&public),
+                "encryptedPrivateKey": user_key.encrypt(pkcs8.as_bytes()).to_string(),
+            }))
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200, "adding keys failed");
+        public
+    }
+
+    fn named(name: &str) -> Item {
+        let mut item = Item::new(ItemKind::SecureNote, None, None);
+        item.name = name.into();
+        item
+    }
+
+    #[test]
+    fn log_in_with_a_device_approved_on_another() {
+        let Some(base) = server() else { return };
+        let email = unique_email("device");
+        let user_key = register(&base, &email, PASSWORD, KDF);
+        let server = Server::parse(&base).unwrap();
+        let client = Client::new(server.clone());
+        let hash = password_hash(&email);
+        let first = client.login(&email, &hash, &Device::new(), None).unwrap();
+        let account_key = add_key_pair(&base, &first.access_token, &user_key);
+
+        // Device A is signed in and holds an item.
+        let (store_a, dir_a) = temp_store();
+        let mut a =
+            Session::sign_in(&store_a, server.clone(), &email, PASSWORD, None, None).unwrap();
+        a.save(&store_a, &named("Shared by device login")).unwrap();
+        assert_eq!(a.account_public_key().as_deref(), Some(&account_key[..]));
+        assert!(!a.user_id().is_empty());
+
+        // Vaultwarden takes login requests only from devices it has seen.
+        let device_b = Device::new();
+        client.login(&email, &hash, &device_b, None).unwrap();
+        let mut request =
+            Session::start_device_login(server.clone(), &email, Some(&device_b), None).unwrap();
+        assert_eq!(request.fingerprint_material(), email);
+        assert_eq!(request.poll().unwrap(), DeviceLoginStatus::Pending);
+
+        // Device A sees the request with the same public key and approves.
+        let pending = a.pending_login_requests().unwrap();
+        let shown = pending
+            .iter()
+            .find(|r| r.id == request.id())
+            .expect("request listed");
+        assert_eq!(request_public_key(shown).unwrap(), request.public_key_der());
+        a.answer_login_request(shown, true).unwrap();
+        assert!(
+            a.pending_login_requests()
+                .unwrap()
+                .iter()
+                .all(|r| r.id != request.id())
+        );
+
+        // Device B finishes with a working session.
+        assert_eq!(request.poll().unwrap(), DeviceLoginStatus::Approved);
+        let (store_b, dir_b) = temp_store();
+        let b = Session::finish_device_login(&store_b, &request, None, None).unwrap();
+        assert_eq!(b.export_user_key(), a.export_user_key());
+        assert!(
+            b.vault
+                .items
+                .iter()
+                .any(|i| i.name == "Shared by device login")
+        );
+        assert_eq!(b.profile.device.identifier, device_b.identifier);
+        // The saved profile unlocks offline with the master password later.
+        let again = Session::unlock(&store_b, &b.profile, PASSWORD).unwrap();
+        assert_eq!(again.vault.items.len(), b.vault.items.len());
+
+        // A denied request ends as denied and cannot be finished.
+        let mut denied =
+            Session::start_device_login(server, &email, Some(&device_b), None).unwrap();
+        let pending = a.pending_login_requests().unwrap();
+        let shown = pending.iter().find(|r| r.id == denied.id()).unwrap();
+        a.answer_login_request(shown, false).unwrap();
+        assert_eq!(denied.poll().unwrap(), DeviceLoginStatus::Denied);
+        assert!(matches!(
+            Session::finish_device_login(&store_b, &denied, None, None),
+            Err(SessionError::NotApproved)
+        ));
+        std::fs::remove_dir_all(dir_a).unwrap();
+        std::fs::remove_dir_all(dir_b).unwrap();
+    }
+
+    #[test]
+    fn unlock_with_pin_and_with_a_kept_user_key() {
+        let Some(base) = server() else { return };
+        let email = unique_email("pin");
+        let user_key = register(&base, &email, PASSWORD, KDF);
+        let server = Server::parse(&base).unwrap();
+        let first = Client::new(server.clone())
+            .login(&email, &password_hash(&email), &Device::new(), None)
+            .unwrap();
+        add_key_pair(&base, &first.access_token, &user_key);
+        let (store, dir) = temp_store();
+        let mut session = Session::sign_in(&store, server, &email, PASSWORD, None, None).unwrap();
+        session.save(&store, &named("Behind a PIN")).unwrap();
+        let profile = session.profile.clone();
+        let by_password = Session::unlock(&store, &profile, PASSWORD).unwrap();
+
+        // A stored PIN unlocks to the same state as the master password.
+        session.enable_pin(&store, "1357", true).unwrap();
+        assert!(Session::has_stored_pin(&store, &profile));
+        let by_pin = Session::unlock_with_pin(&store, &profile, "1357", None).unwrap();
+        assert_eq!(by_pin.vault.items, by_password.vault.items);
+        assert_eq!(by_pin.synced_at, by_password.synced_at);
+        assert_eq!(by_pin.export_user_key(), by_password.export_user_key());
+
+        // Wrong PINs are counted on disk; the fifth turns PIN unlock off.
+        for left in (1..MAX_PIN_ATTEMPTS).rev() {
+            match Session::unlock_with_pin(&store, &profile, "0000", None) {
+                Err(SessionError::WrongPin { attempts_left }) => assert_eq!(attempts_left, left),
+                other => panic!("expected a wrong PIN, got {:?}", other.err()),
+            }
+        }
+        assert!(matches!(
+            Session::unlock_with_pin(&store, &profile, "0000", None),
+            Err(SessionError::PinUnavailable)
+        ));
+        assert!(!Session::has_stored_pin(&store, &profile));
+        assert!(matches!(
+            Session::unlock_with_pin(&store, &profile, "1357", None),
+            Err(SessionError::PinUnavailable)
+        ));
+
+        // A PIN kept only in memory leaves nothing on disk.
+        let mut held = session.enable_pin(&store, "2468", false).unwrap();
+        assert!(!Session::has_stored_pin(&store, &profile));
+        let in_memory =
+            Session::unlock_with_pin(&store, &profile, "2468", Some(&mut held)).unwrap();
+        assert_eq!(in_memory.vault.items, by_password.vault.items);
+
+        // The exported user key unlocks; anything else is refused.
+        let kept = session.export_user_key();
+        let by_key = Session::unlock_with_user_key(&store, &profile, &kept).unwrap();
+        assert_eq!(by_key.vault.items, by_password.vault.items);
+        let other = SymmetricKey::generate().to_bytes();
+        assert!(matches!(
+            Session::unlock_with_user_key(&store, &profile, &other),
+            Err(SessionError::KeyRejected)
+        ));
+        assert!(matches!(
+            Session::unlock_with_user_key(&store, &profile, &kept[..32]),
+            Err(SessionError::KeyRejected)
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// Two-step login with a security key, using a software authenticator.
+/// Vaultwarden offers WebAuthn only when its DOMAIN is a host name, so this
+/// needs its own server: set HUSHJAR_INTEROP_WEBAUTHN, for example to
+/// http://localhost:18299 for a Vaultwarden with DOMAIN=http://localhost:18299.
+mod security_key {
+    use super::*;
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
+    use hushjar_core::api::{SecondFactor, TwoFactorProvider};
+    use hushjar_core::session::{Session, SessionError};
+    use hushjar_core::store::Store;
+    use hushjar_core::webauthn::{
+        self, Assertion, AssertionRequest, Cancel, SecurityKey, WebAuthnError,
+    };
+    use p256::ecdsa::signature::Signer;
+    use p256::ecdsa::{DerSignature, SigningKey};
+    use sha2::{Digest, Sha256};
+
+    const PASSWORD: &str = "invented interop password";
+
+    /// A CBOR head: major type and length.
+    fn head(major: u8, len: usize) -> Vec<u8> {
+        match len {
+            0..=23 => vec![major << 5 | len as u8],
+            24..=255 => vec![major << 5 | 24, len as u8],
+            _ => {
+                let mut out = vec![major << 5 | 25];
+                out.extend_from_slice(&(len as u16).to_be_bytes());
+                out
+            }
+        }
+    }
+
+    fn cbor_text(text: &str) -> Vec<u8> {
+        let mut out = head(3, text.len());
+        out.extend_from_slice(text.as_bytes());
+        out
+    }
+
+    fn cbor_bytes(bytes: &[u8]) -> Vec<u8> {
+        let mut out = head(2, bytes.len());
+        out.extend_from_slice(bytes);
+        out
+    }
+
+    /// A security key in memory: one P-256 credential.
+    struct SoftKey {
+        signing: SigningKey,
+        credential_id: Vec<u8>,
+        rp_id: String,
+    }
+
+    impl SoftKey {
+        fn new(rp_id: &str) -> Self {
+            Self {
+                signing: SigningKey::from_slice(&crypto::random_bytes::<32>()).unwrap(),
+                credential_id: crypto::random_bytes::<16>().to_vec(),
+                rp_id: rp_id.into(),
+            }
+        }
+
+        /// The credential public key as a COSE EC2 key (ES256).
+        fn cose_key(&self) -> Vec<u8> {
+            let point = self.signing.verifying_key().to_sec1_point(false);
+            let raw = point.as_bytes();
+            let mut out = vec![0xA5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21];
+            out.extend(cbor_bytes(&raw[1..33]));
+            out.push(0x22);
+            out.extend(cbor_bytes(&raw[33..65]));
+            out
+        }
+
+        /// Authenticator data. The signature counter must grow, or the
+        /// server suspects a cloned key.
+        fn auth_data(&self, flags: u8, counter: u32, attested: bool) -> Vec<u8> {
+            let mut data = Sha256::digest(self.rp_id.as_bytes()).to_vec();
+            data.push(flags);
+            data.extend_from_slice(&counter.to_be_bytes());
+            if attested {
+                data.extend_from_slice(&[0; 16]);
+                data.extend_from_slice(&(self.credential_id.len() as u16).to_be_bytes());
+                data.extend_from_slice(&self.credential_id);
+                data.extend(self.cose_key());
+            }
+            data
+        }
+
+        /// A registration response with "none" attestation.
+        fn register(&self, options: &Value, origin: &str) -> Value {
+            let challenge = options["challenge"].as_str().unwrap();
+            let client_data = json!({
+                "type": "webauthn.create",
+                "challenge": challenge,
+                "origin": origin,
+                "crossOrigin": false,
+            })
+            .to_string();
+            let mut attestation = vec![0xA3];
+            attestation.extend(cbor_text("fmt"));
+            attestation.extend(cbor_text("none"));
+            attestation.extend(cbor_text("attStmt"));
+            attestation.push(0xA0);
+            attestation.extend(cbor_text("authData"));
+            attestation.extend(cbor_bytes(&self.auth_data(0x41, 0, true)));
+            let id = B64URL.encode(&self.credential_id);
+            json!({
+                "id": id,
+                "rawId": id,
+                "type": "public-key",
+                "response": {
+                    "attestationObject": B64URL.encode(&attestation),
+                    "clientDataJson": B64URL.encode(client_data.as_bytes()),
+                }
+            })
+        }
+    }
+
+    impl SecurityKey for SoftKey {
+        fn get_assertion(
+            &self,
+            request: &AssertionRequest,
+            cancel: &Cancel,
+        ) -> Result<Assertion, WebAuthnError> {
+            if cancel.is_cancelled() {
+                return Err(WebAuthnError::Cancelled);
+            }
+            assert_eq!(request.rp_id, self.rp_id);
+            if !request.allow_credentials.contains(&self.credential_id) {
+                return Err(WebAuthnError::NotRegistered);
+            }
+            let authenticator_data = self.auth_data(0x01, 1, false);
+            let mut signed = authenticator_data.clone();
+            signed.extend_from_slice(&request.client_data_hash);
+            let signature: DerSignature = self.signing.sign(&signed);
+            Ok(Assertion {
+                credential_id: self.credential_id.clone(),
+                authenticator_data,
+                signature: signature.as_bytes().to_vec(),
+                user_handle: None,
+                used_app_id: false,
+            })
+        }
+    }
+
+    #[test]
+    fn two_step_login_with_a_security_key() {
+        let Ok(base) = std::env::var("HUSHJAR_INTEROP_WEBAUTHN") else {
+            eprintln!(
+                "skipped: set HUSHJAR_INTEROP_WEBAUTHN to a Vaultwarden with a host-name DOMAIN"
+            );
+            return;
+        };
+        let kdf = Kdf::Pbkdf2 {
+            iterations: 600_000,
+        };
+        let email = unique_email("webauthn");
+        register(&base, &email, PASSWORD, kdf);
+        let server = Server::parse(&base).unwrap();
+        let origin = webauthn::origin_for(&server);
+        let client = Client::new(server.clone());
+        let master = crypto::master_key(PASSWORD, &email, kdf).unwrap();
+        let hash = crypto::password_hash(&master, PASSWORD, HashPurpose::Server);
+        let login = client.login(&email, &hash, &Device::new(), None).unwrap();
+        let bearer = format!("Bearer {}", login.access_token.as_str());
+
+        // Register the software key as the account's second factor.
+        let host = base.split("://").nth(1).unwrap().split(':').next().unwrap();
+        let key = SoftKey::new(host);
+        let options: Value = ureq::post(format!("{base}/api/two-factor/get-webauthn-challenge"))
+            .header("Authorization", &bearer)
+            .send_json(json!({ "masterPasswordHash": hash.as_str() }))
+            .unwrap()
+            .body_mut()
+            .read_json()
+            .unwrap();
+        let response = ureq::put(format!("{base}/api/two-factor/webauthn"))
+            .header("Authorization", &bearer)
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(json!({
+                "id": 1,
+                "name": "Hushjar test key",
+                "masterPasswordHash": hash.as_str(),
+                "deviceResponse": key.register(&options, &origin),
+            }))
+            .unwrap();
+        assert_eq!(
+            response.status().as_u16(),
+            200,
+            "registering the key failed"
+        );
+
+        // Signing in now needs the key; the challenge carries its options.
+        let dir =
+            std::env::temp_dir().join(format!("hushjar-interop-{}", uuid::Uuid::new_v4().simple()));
+        let store = Store::open(dir.clone()).unwrap();
+        let challenge = match Session::sign_in(&store, server.clone(), &email, PASSWORD, None, None)
+        {
+            Err(SessionError::TwoFactorRequired(c)) => c,
+            other => panic!("expected two-step login, got {:?}", other.err()),
+        };
+        assert!(challenge.providers.contains(&TwoFactorProvider::WebAuthn));
+        let options = challenge
+            .webauthn_options()
+            .expect("WebAuthn options")
+            .clone();
+        let token = webauthn::sign(&options, &server, &key, &Cancel::new()).unwrap();
+        let second = SecondFactor {
+            provider: TwoFactorProvider::WebAuthn,
+            token: &token,
+            remember: false,
+        };
+        let session =
+            Session::sign_in(&store, server.clone(), &email, PASSWORD, Some(second), None).unwrap();
+        assert_eq!(session.profile.email, email);
+
+        // The assertion cannot be replayed: the challenge is used up.
+        let replay = SecondFactor {
+            provider: TwoFactorProvider::WebAuthn,
+            token: &token,
+            remember: false,
+        };
+        assert!(Session::sign_in(&store, server, &email, PASSWORD, Some(replay), None).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

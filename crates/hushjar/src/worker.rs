@@ -147,9 +147,9 @@ fn run(
                             message: describe(&e),
                         }),
                     },
-                    Some(Err(SessionError::TwoFactorRequired(p))) => {
-                        emit(Event::NeedsSignIn { two_factor: p })
-                    }
+                    Some(Err(SessionError::TwoFactorRequired(p))) => emit(Event::NeedsSignIn {
+                        two_factor: p.providers,
+                    }),
                     _ => emit(Event::NeedsSignIn { two_factor: vec![] }),
                 }
             }
@@ -187,8 +187,10 @@ fn run(
                         });
                         session = Some(s);
                     }
-                    Err(SessionError::TwoFactorRequired(providers)) => {
-                        emit(Event::TwoFactorRequired { providers })
+                    Err(SessionError::TwoFactorRequired(challenge)) => {
+                        emit(Event::TwoFactorRequired {
+                            providers: challenge.providers,
+                        })
                     }
                     Err(e) => emit(Event::Failed {
                         message: describe(&e),
@@ -252,9 +254,9 @@ fn run(
                 let Some(s) = session.as_mut() else { continue };
                 match s.reconnect(&store, &password, second_factor(&second)) {
                     Ok(()) => go_online(s, None, &emit),
-                    Err(SessionError::TwoFactorRequired(p)) => {
-                        emit(Event::NeedsSignIn { two_factor: p })
-                    }
+                    Err(SessionError::TwoFactorRequired(p)) => emit(Event::NeedsSignIn {
+                        two_factor: p.providers,
+                    }),
                     Err(e) => emit(Event::Failed {
                         message: describe(&e),
                     }),

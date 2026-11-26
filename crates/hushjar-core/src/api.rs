@@ -10,6 +10,9 @@ use zeroize::Zeroizing;
 
 use crate::crypto::Kdf;
 
+mod auth_requests;
+pub use auth_requests::AuthRequest;
+
 /// The client name and version sent to servers. Vaultwarden hides newer item
 /// types, such as SSH keys, from clients that report older versions.
 pub const CLIENT_ID: &str = "hushjar";
@@ -26,7 +29,11 @@ pub enum ApiError {
     #[error("{0}")]
     Rejected(String),
     #[error("two-step login is required")]
-    TwoFactorRequired(Vec<TwoFactorProvider>),
+    TwoFactorRequired(TwoFactorChallenge),
+    /// Bitwarden emailed a code to confirm this new device; sign in again
+    /// with it in [`PasswordGrant::new_device_code`].
+    #[error("enter the code sent to your email to confirm this new device")]
+    NewDeviceVerificationRequired,
     #[error("the session has expired; sign in again")]
     Unauthorized,
     #[error("the server sent an unexpected reply")]
@@ -40,7 +47,11 @@ pub enum ApiError {
 pub enum TwoFactorProvider {
     Authenticator,
     Email,
+    /// A YubiKey one-time password: the token is the 44-character string the
+    /// key types when touched.
     YubiKey,
+    /// A FIDO2/WebAuthn security key; see [`crate::webauthn`].
+    WebAuthn,
     Other(u8),
 }
 
@@ -50,6 +61,7 @@ impl TwoFactorProvider {
             TwoFactorProvider::Authenticator => 0,
             TwoFactorProvider::Email => 1,
             TwoFactorProvider::YubiKey => 3,
+            TwoFactorProvider::WebAuthn => 7,
             TwoFactorProvider::Other(n) => n,
         }
     }
@@ -59,12 +71,64 @@ impl TwoFactorProvider {
             0 => TwoFactorProvider::Authenticator,
             1 => TwoFactorProvider::Email,
             3 => TwoFactorProvider::YubiKey,
+            7 => TwoFactorProvider::WebAuthn,
             n => TwoFactorProvider::Other(n),
         }
     }
 
     pub fn supported(self) -> bool {
         !matches!(self, TwoFactorProvider::Other(_))
+    }
+}
+
+/// What the server asked for when two-step login is required: the methods
+/// the account has set up and any details each one needs to continue.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TwoFactorChallenge {
+    /// The account's methods, ordered by provider number.
+    pub providers: Vec<TwoFactorProvider>,
+    /// `TwoFactorProviders2` from the reply: provider number to details.
+    details: Map<String, Value>,
+}
+
+impl TwoFactorChallenge {
+    /// Reads a login rejection. `None` when it is not a two-step request.
+    pub fn from_response(body: &Value) -> Option<Self> {
+        let details = field(body, "TwoFactorProviders2")?.as_object()?.clone();
+        let mut providers: Vec<TwoFactorProvider> = details
+            .keys()
+            .filter_map(|k| k.parse::<u8>().ok())
+            .map(TwoFactorProvider::from_code)
+            .collect();
+        providers.sort_by_key(|p| p.code());
+        Some(Self { providers, details })
+    }
+
+    /// The server's details for one method, if it sent any.
+    pub fn details(&self, provider: TwoFactorProvider) -> Option<&Value> {
+        self.details
+            .get(&provider.code().to_string())
+            .filter(|v| !v.is_null())
+    }
+
+    /// The WebAuthn request options for a security key. Vaultwarden only
+    /// offers them when its domain is a host name, not an IP address.
+    pub fn webauthn_options(&self) -> Option<&Value> {
+        self.details(TwoFactorProvider::WebAuthn)
+    }
+
+    /// The partly hidden address that email codes go to, for display.
+    pub fn email_hint(&self) -> Option<&str> {
+        self.details(TwoFactorProvider::Email)
+            .and_then(|d| field_str(d, "Email"))
+    }
+
+    /// Whether the registered YubiKey can be read over NFC.
+    pub fn yubikey_nfc(&self) -> bool {
+        self.details(TwoFactorProvider::YubiKey)
+            .and_then(|d| field(d, "Nfc"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     }
 }
 
@@ -203,6 +267,36 @@ pub struct SecondFactor<'a> {
     pub remember: bool,
 }
 
+/// A password grant at the identity server. Besides the master password
+/// hash, the secret can be the access code of an approved login request.
+pub struct PasswordGrant<'a> {
+    pub email: &'a str,
+    /// The master password hash, or the access code with `auth_request`.
+    pub secret: &'a str,
+    pub device: &'a Device,
+    pub second: Option<SecondFactor<'a>>,
+    /// The code Bitwarden emailed to confirm a new device.
+    pub new_device_code: Option<&'a str>,
+    /// The ID of an approved login request (log in with a device).
+    pub auth_request: Option<&'a str>,
+}
+
+/// The `ErrorModel.Message` Bitwarden sends when a new device must be
+/// confirmed with an emailed code. Bitwarden's clients match it exactly.
+const NEW_DEVICE_MESSAGE: &str = "new device verification required";
+
+/// Sorts a rejected login into the cases the user can act on.
+fn login_rejection(status: u16, body: &Value) -> ApiError {
+    if let Some(challenge) = TwoFactorChallenge::from_response(body) {
+        return ApiError::TwoFactorRequired(challenge);
+    }
+    let message = field(body, "ErrorModel").and_then(|m| field_str(m, "Message"));
+    if status == 400 && message.is_some_and(|m| m.eq_ignore_ascii_case(NEW_DEVICE_MESSAGE)) {
+        return ApiError::NewDeviceVerificationRequired;
+    }
+    Client::rejection(status, body)
+}
+
 /// Looks a key up ignoring case, since servers differ in JSON casing.
 pub fn field<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     let object = value.as_object()?;
@@ -268,10 +362,16 @@ impl Client {
         if status == 401 {
             return ApiError::Unauthorized;
         }
-        let message = field_str(body, "error_description")
-            .or_else(|| field(body, "ErrorModel").and_then(|m| field_str(m, "Message")))
-            .or_else(|| field_str(body, "message"))
-            .unwrap_or("the server refused the request");
+        // Vaultwarden sends an empty error_description beside the message.
+        let message = [
+            field_str(body, "error_description"),
+            field(body, "ErrorModel").and_then(|m| field_str(m, "Message")),
+            field_str(body, "message"),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|m| !m.trim().is_empty())
+        .unwrap_or("the server refused the request");
         ApiError::Rejected(message.to_string())
     }
 
@@ -301,24 +401,50 @@ impl Client {
         device: &Device,
         second: Option<SecondFactor<'_>>,
     ) -> Result<Login, ApiError> {
+        self.password_grant(&PasswordGrant {
+            email,
+            secret: password_hash,
+            device,
+            second,
+            new_device_code: None,
+            auth_request: None,
+        })
+    }
+
+    /// Runs a password grant: a master password login, optionally with a
+    /// second factor or new-device code, or the final step of logging in
+    /// with an approved request from another device.
+    pub fn password_grant(&self, grant: &PasswordGrant<'_>) -> Result<Login, ApiError> {
+        let PasswordGrant {
+            email,
+            secret,
+            device,
+            ..
+        } = *grant;
         let kind = Device::kind().to_string();
         let mut form: Vec<(&str, String)> = vec![
             ("grant_type", "password".into()),
             ("scope", "api offline_access".into()),
             ("client_id", CLIENT_ID.into()),
             ("username", email.into()),
-            ("password", password_hash.into()),
+            ("password", secret.into()),
             ("deviceIdentifier", device.identifier.clone()),
             ("deviceName", device.name.clone()),
             ("deviceType", kind),
         ];
-        if let Some(second) = &second {
+        if let Some(second) = &grant.second {
             form.push(("twoFactorToken", second.token.into()));
             form.push(("twoFactorProvider", second.provider.code().to_string()));
             form.push((
                 "twoFactorRemember",
                 if second.remember { "1" } else { "0" }.into(),
             ));
+        }
+        if let Some(code) = grant.new_device_code {
+            form.push(("newDeviceOtp", code.trim().into()));
+        }
+        if let Some(id) = grant.auth_request {
+            form.push(("authRequest", id.into()));
         }
         let auth_email =
             base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, email);
@@ -332,17 +458,7 @@ impl Client {
             .map_err(Self::net)?;
         let (status, body) = Self::read(response, SMALL_LIMIT)?;
         if status != 200 {
-            if let Some(providers) = field(&body, "TwoFactorProviders2").and_then(Value::as_object)
-            {
-                let mut list: Vec<TwoFactorProvider> = providers
-                    .keys()
-                    .filter_map(|k| k.parse::<u8>().ok())
-                    .map(TwoFactorProvider::from_code)
-                    .collect();
-                list.sort_by_key(|p| p.code());
-                return Err(ApiError::TwoFactorRequired(list));
-            }
-            return Err(Self::rejection(status, &body));
+            return Err(login_rejection(status, &body));
         }
         let string = |key: &str| field_str(&body, key).map(str::to_string);
         Ok(Login {
@@ -374,6 +490,36 @@ impl Client {
             .map_err(Self::net)?;
         let (status, body) = Self::read(response, SMALL_LIMIT)?;
         if status == 200 {
+            Ok(())
+        } else {
+            Err(Self::rejection(status, &body))
+        }
+    }
+
+    /// Asks Bitwarden to email a new code for confirming this device.
+    /// Bitwarden answers the same way whether or not the details are right.
+    pub fn resend_new_device_code(
+        &self,
+        email: &str,
+        password_hash: &str,
+        device: &Device,
+    ) -> Result<(), ApiError> {
+        let response = self
+            .agent
+            .post(format!(
+                "{}/accounts/resend-new-device-otp",
+                self.server.api
+            ))
+            .header("Bitwarden-Client-Version", CLIENT_VERSION)
+            .header("Device-Identifier", &device.identifier)
+            .header("Device-Type", Device::kind().to_string())
+            .send_json(json!({
+                "email": email,
+                "masterPasswordHash": password_hash,
+            }))
+            .map_err(Self::net)?;
+        let (status, body) = Self::read(response, SMALL_LIMIT)?;
+        if (200..300).contains(&status) {
             Ok(())
         } else {
             Err(Self::rejection(status, &body))
@@ -568,6 +714,79 @@ mod tests {
             "plain http only for loopback"
         );
         assert!(Server::parse("https://user@vault.example.org").is_err());
+    }
+
+    #[test]
+    fn two_step_challenge_from_vaultwarden() {
+        // The shape of Vaultwarden 1.37's json_err_twofactor.
+        let body = json!({
+            "error": "invalid_grant",
+            "error_description": "Two factor required.",
+            "TwoFactorProviders": ["0", "1", "3", "7"],
+            "TwoFactorProviders2": {
+                "0": null,
+                "1": { "Email": "a***@example.invalid" },
+                "3": { "Nfc": true },
+                "7": { "challenge": "AAAA", "rpId": "vault.example.org", "allowCredentials": [] }
+            },
+            "MasterPasswordPolicy": { "Object": "masterPasswordPolicy" }
+        });
+        let ApiError::TwoFactorRequired(challenge) = login_rejection(400, &body) else {
+            panic!("expected two-step login");
+        };
+        assert_eq!(
+            challenge.providers,
+            vec![
+                TwoFactorProvider::Authenticator,
+                TwoFactorProvider::Email,
+                TwoFactorProvider::YubiKey,
+                TwoFactorProvider::WebAuthn,
+            ]
+        );
+        assert!(challenge.providers.iter().all(|p| p.supported()));
+        assert_eq!(challenge.email_hint(), Some("a***@example.invalid"));
+        assert!(challenge.yubikey_nfc());
+        assert_eq!(
+            challenge
+                .webauthn_options()
+                .and_then(|o| field_str(o, "rpId")),
+            Some("vault.example.org")
+        );
+        assert_eq!(challenge.details(TwoFactorProvider::Authenticator), None);
+    }
+
+    #[test]
+    fn new_device_verification_is_its_own_error() {
+        // Bitwarden's DeviceValidator.BuildDeviceErrorResult.
+        let body = json!({
+            "error": "device_error",
+            "error_description": "New device verification required",
+            "ErrorModel": { "Message": "new device verification required", "Object": "error" }
+        });
+        assert!(matches!(
+            login_rejection(400, &body),
+            ApiError::NewDeviceVerificationRequired
+        ));
+        let wrong = json!({
+            "error": "device_error",
+            "error_description": "Invalid New Device OTP",
+            "ErrorModel": { "Message": "invalid new device otp", "Object": "error" }
+        });
+        assert!(
+            matches!(login_rejection(400, &wrong), ApiError::Rejected(m) if m == "Invalid New Device OTP")
+        );
+        // Vaultwarden 1.37's wrong-password reply, with an empty description.
+        let password = json!({
+            "message": "Username or password is incorrect. Try again",
+            "errorModel": { "message": "Username or password is incorrect. Try again", "object": "error" },
+            "error": "",
+            "error_description": "",
+            "object": "error"
+        });
+        assert!(matches!(
+            login_rejection(400, &password),
+            ApiError::Rejected(m) if m == "Username or password is incorrect. Try again"
+        ));
     }
 
     #[test]

@@ -143,6 +143,26 @@ impl Store {
         fs::read(self.account_dir(id)?.join("cache.bin"))
     }
 
+    /// Saves the PIN unlock data, for accounts whose PIN should work after
+    /// a restart. The content is the user key wrapped with a PIN-derived key.
+    pub fn write_pin(&self, id: &str, data: &[u8]) -> io::Result<()> {
+        let dir = self.account_dir(id)?;
+        private_dir(&dir)?;
+        write_atomic(&dir.join("pin.json"), data)
+    }
+
+    pub fn read_pin(&self, id: &str) -> io::Result<Vec<u8>> {
+        fs::read(self.account_dir(id)?.join("pin.json"))
+    }
+
+    /// Turns PIN unlock off for an account. Missing data is not an error.
+    pub fn remove_pin(&self, id: &str) -> io::Result<()> {
+        match fs::remove_file(self.account_dir(id)?.join("pin.json")) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        }
+    }
+
     /// Forgets an account on this device.
     pub fn remove(&self, id: &str) -> io::Result<()> {
         let dir = self.account_dir(id)?;

@@ -9,13 +9,20 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["security-key"]
+security-key = ["dep:authenticator"]
+
 [dependencies]
 aes = "0.9.4"
 aes-gcm = "0.11.1"
+# Security keys over USB, with pure-Rust cryptography. On Linux it links the
+# system libudev; build without default features to leave it out.
+authenticator = { version = "0.5.0", default-features = false, features = ["crypto_rust"], optional = true }
 argon2 = "0.6.0"
 base64 = "0.23.1"
 cbc = { version = "0.2.1", features = ["alloc"] }
-getrandom = "0.4"
+getrandom = { version = "0.4", features = ["sys_rng"] }
 hkdf = "0.13.0"
 hmac = "0.13.0"
 pbkdf2 = "0.13.0"
@@ -30,4 +37,6 @@ uuid = { version = "1.29.3", features = ["v4"] }
 zeroize = { version = "1.9.2", features = ["derive"] }
 
 [dev-dependencies]
+# A software authenticator for the WebAuthn interop test.
+p256 = { version = "0.14.0", features = ["ecdsa"] }
 uuid = { version = "1.29.3", features = ["v4"] }
