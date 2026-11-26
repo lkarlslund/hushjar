@@ -7,6 +7,7 @@ mod mock;
 mod model;
 #[cfg(feature = "snapshot")]
 mod snapshot;
+mod sshagent;
 mod tree;
 mod worker;
 

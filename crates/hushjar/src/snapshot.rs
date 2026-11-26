@@ -55,6 +55,9 @@ const STEPS: &[Step] = &[
         },
         800,
     ),
+    // Leaves time for an SSH signing request from outside, then allows it.
+    ("08-ssh-prompt", |_| {}, 4000),
+    ("09-ssh-allowed", |w| w.invoke_ssh_answer(true), 800),
 ];
 
 pub fn run(window: &AppWindow, dir: PathBuf) -> Rc<Timer> {

@@ -23,6 +23,9 @@ component TopBar inherits Rectangle {
     callback send();
     callback settings();
     callback lock-all();
+    callback agent-clicked();
+    in property <bool> agent-running;
+    in property <int> agent-keys;
 
     height: 44px;
     background: Theme.sidebar;
@@ -84,6 +87,15 @@ component TopBar inherits Rectangle {
         Rectangle { width: 6px; }
         VerticalLayout {
             alignment: center;
+            IconButton {
+                icon: Icons.terminal;
+                label: root.agent-running ? "SSH agent: " + root.agent-keys + " keys offered" : "SSH agent is not running";
+                active: root.agent-running && root.agent-keys > 0;
+                clicked => { root.agent-clicked(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
             IconButton { icon: Icons.dice; label: "Generator (Ctrl+G)"; clicked => { root.generator(); } }
         }
         VerticalLayout {
@@ -141,6 +153,12 @@ export component AppWindow inherits Window {
 
     in property <string> sync-text;
     in property <string> toast;
+    in property <string> ssh-prompt;
+    in property <bool> agent-running;
+    in property <int> agent-keys;
+    in property <bool> ssh-visible;
+    in property <bool> ssh-enabled;
+    in property <int> ssh-mode;
     in-out property <bool> sidebar-visible: true;
     in-out property <length> sidebar-width: 320px;
 
@@ -188,6 +206,10 @@ export component AppWindow inherits Window {
     callback account-reconnect(string, string, bool);
     // Any key press or click, for the inactivity lock.
     callback activity();
+    callback ssh-answer(bool);
+    callback agent-clicked();
+    callback ssh-toggle(bool);
+    callback ssh-mode-picked(int);
 
     callback sync();
     callback new-item();
@@ -227,6 +249,9 @@ export component AppWindow inherits Window {
                 send => { root.not-yet("Send"); }
                 settings => { root.not-yet("Settings"); }
                 lock-all => { root.lock-all(); }
+                agent-running: root.agent-running;
+                agent-keys: root.agent-keys;
+                agent-clicked => { root.agent-clicked(); }
             }
 
             HorizontalLayout {
@@ -289,6 +314,11 @@ export component AppWindow inherits Window {
                     item-types: root.item-types;
                     type-index: root.type-index;
                     pick-type(index) => { root.pick-type(index); }
+                    ssh-visible: root.ssh-visible;
+                    ssh-enabled: root.ssh-enabled;
+                    ssh-mode: root.ssh-mode;
+                    ssh-toggle(on) => { root.ssh-toggle(on); }
+                    ssh-mode-picked(index) => { root.ssh-mode-picked(index); }
                     create-folder(name) => { root.create-folder(name); }
                     sign-in-submit(choice, url, email, password) => { root.sign-in-submit(choice, url, email, password); }
                     sign-in-code(provider, code, remember) => { root.sign-in-code(provider, code, remember); }
@@ -318,6 +348,46 @@ export component AppWindow inherits Window {
                     restore-item => { root.restore-item(); }
                     unlock(password) => { root.unlock(password); }
                 }
+            }
+        }
+    }
+
+    // SSH agent approval prompt
+    if root.ssh-prompt != "": Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 52px;
+        width: min(560px, parent.width - 32px);
+        height: prompt-layout.preferred-height;
+        border-radius: Theme.radius;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.honey;
+        drop-shadow-blur: 18px;
+        drop-shadow-color: #00000055;
+        accessible-role: groupbox;
+        accessible-label: "SSH agent request";
+
+        prompt-layout := VerticalLayout {
+            padding: 14px;
+            spacing: 10px;
+            HorizontalLayout {
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: start;
+                    Icon { source: Icons.terminal; width: 22px; height: 22px; tint: Theme.honey; }
+                }
+                Text {
+                    text: root.ssh-prompt;
+                    wrap: word-wrap;
+                    color: Theme.text;
+                    horizontal-stretch: 1;
+                }
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+                ActionButton { text: "Deny"; danger: true; clicked => { root.ssh-answer(false); } }
+                ActionButton { text: "Allow"; primary: true; clicked => { root.ssh-answer(true); } }
             }
         }
     }

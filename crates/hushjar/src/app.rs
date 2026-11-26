@@ -2,7 +2,7 @@
 //! the clipboard.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -17,6 +17,7 @@ use zeroize::Zeroizing;
 
 use crate::clipboard::Clipboard;
 use crate::model::{self, Account, Field, FieldPath, Item, ItemType};
+use crate::sshagent::{AskMode, Bridge, Prompt};
 use crate::tree::{self, GroupBy, Row};
 use crate::worker::{Command, Event, Worker};
 use crate::{
@@ -106,6 +107,11 @@ pub struct State {
     clipboard: Rc<RefCell<Clipboard>>,
     last_activity: Instant,
     next_id: usize,
+    bridge: Arc<Bridge>,
+    agent: Result<hushjar_agent::Agent, String>,
+    prompts: VecDeque<Prompt>,
+    /// Per SSH key ("account/item"): offered to the agent, and when to ask.
+    ssh_settings: HashMap<String, (bool, AskMode)>,
 }
 
 type Shared = Rc<RefCell<State>>;
@@ -295,6 +301,23 @@ impl App {
                 note: String::new(),
             });
         }
+        let bridge = Arc::new(Bridge::new(|prompt| {
+            let _ = slint::invoke_from_event_loop(move || {
+                CONTEXT.with(|c| {
+                    if let Some((weak, st)) = &*c.borrow()
+                        && let Some(win) = weak.upgrade()
+                    {
+                        show_prompt(&win, st, prompt);
+                    }
+                });
+            });
+        }));
+        let agent = match hushjar_agent::default_socket_path() {
+            Some(path) => hushjar_agent::Agent::start(&path, bridge.clone(), bridge.clone())
+                .map_err(|e| e.to_string()),
+            None => Err("the SSH agent is not available on this system yet".into()),
+        };
+        let ssh_settings = load_ssh_settings(&store);
         let state: Shared = Rc::new(RefCell::new(State {
             store,
             accounts,
@@ -314,6 +337,10 @@ impl App {
             clipboard: Rc::new(RefCell::new(Clipboard::new())),
             last_activity: Instant::now(),
             next_id: 1,
+            bridge,
+            agent,
+            prompts: VecDeque::new(),
+            ssh_settings,
         }));
         CONTEXT.with(|c| *c.borrow_mut() = Some((window.as_weak(), state.clone())));
         window.set_rows(ModelRc::from(state.borrow().rows_model.clone()));
@@ -339,6 +366,8 @@ impl App {
             None => show_sign_in(&app.window, &state),
         }
         update_sync_text(&app.window, &state);
+        app.window.set_agent_running(state.borrow().agent.is_ok());
+        update_agent_keys(&app.window, &state);
 
         // Once a second: verification codes, the sync label and the idle lock.
         let ticker = Timer::default();
@@ -355,6 +384,15 @@ impl App {
             }
             if now.is_multiple_of(15) {
                 update_sync_text(&w, &st);
+            }
+            let expired = {
+                let mut state = st.borrow_mut();
+                let before = state.prompts.len();
+                state.prompts.retain(|p| p.deadline > Instant::now());
+                before != state.prompts.len()
+            };
+            if expired {
+                render_prompt(&w, &st);
             }
             let idle =
                 st.borrow().last_activity.elapsed() > IDLE_LOCK && st.borrow().any_unlocked();
@@ -879,6 +917,56 @@ fn wire(w: &AppWindow, state: &Shared) {
         lock_all(&win, st);
         toast(&win, st, "Locked every account");
     });
+    on!(on_ssh_answer, |win, st, allow: bool| {
+        let prompt = st.borrow_mut().prompts.pop_front();
+        if let Some(prompt) = prompt {
+            prompt.answer(allow);
+        }
+        render_prompt(&win, st);
+    });
+    on!(on_agent_clicked, |win, st| {
+        let (path, count) = {
+            let state = st.borrow();
+            match &state.agent {
+                Ok(agent) => (
+                    Ok(agent.socket_path().display().to_string()),
+                    state.bridge.key_count(),
+                ),
+                Err(e) => (Err(e.clone()), 0),
+            }
+        };
+        match path {
+            Ok(path) => {
+                let clipboard = st.borrow().clipboard.clone();
+                let line = format!("export SSH_AUTH_SOCK={path}");
+                let copied = Clipboard::copy(&clipboard, &line).is_ok();
+                let keys = if count == 1 {
+                    "1 key".to_string()
+                } else {
+                    format!("{count} keys")
+                };
+                let tail = if copied {
+                    " Copied the SSH_AUTH_SOCK line."
+                } else {
+                    ""
+                };
+                toast(&win, st, &format!("SSH agent is offering {keys}.{tail}"));
+            }
+            Err(e) => toast(&win, st, &format!("The SSH agent could not start: {e}")),
+        }
+    });
+    on!(on_ssh_toggle, |win, st, on: bool| {
+        change_ssh_setting(&win, st, |setting| setting.0 = on);
+    });
+    on!(on_ssh_mode_picked, |win, st, index: i32| {
+        change_ssh_setting(&win, st, |setting| {
+            setting.1 = if index == 1 {
+                AskMode::EveryTime
+            } else {
+                AskMode::FirstTime
+            }
+        });
+    });
     on!(on_not_yet, |win, st, what: SharedString| {
         let milestone = if what.as_str() == "Settings" {
             "M3"
@@ -887,6 +975,136 @@ fn wire(w: &AppWindow, state: &Shared) {
         };
         toast(&win, st, &format!("{what} is planned for {milestone}"));
     });
+}
+
+fn ssh_key_id(account: &AccountState, item: &str) -> String {
+    format!("{}/{}", account.profile.id, item)
+}
+
+fn load_ssh_settings(store: &Store) -> HashMap<String, (bool, AskMode)> {
+    let settings = store.read_settings();
+    let mut out = HashMap::new();
+    if let Some(keys) = settings.get("ssh_keys").and_then(|v| v.as_object()) {
+        for (id, value) in keys {
+            let enabled = value
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let mode = AskMode::parse(value.get("ask").and_then(|v| v.as_str()).unwrap_or("first"));
+            out.insert(id.clone(), (enabled, mode));
+        }
+    }
+    out
+}
+
+fn save_ssh_settings(st: &Shared) {
+    let state = st.borrow();
+    let mut settings = state.store.read_settings();
+    if !settings.is_object() {
+        settings = serde_json::json!({});
+    }
+    let keys: serde_json::Map<String, serde_json::Value> = state
+        .ssh_settings
+        .iter()
+        .map(|(id, (enabled, mode))| {
+            (
+                id.clone(),
+                serde_json::json!({ "enabled": enabled, "ask": mode.as_str() }),
+            )
+        })
+        .collect();
+    settings["ssh_keys"] = serde_json::Value::Object(keys);
+    let _ = state.store.write_settings(&settings);
+}
+
+/// Offers the SSH keys of unlocked accounts that are switched on.
+fn update_agent_keys(win: &AppWindow, st: &Shared) {
+    let state = st.borrow();
+    let mut keys = Vec::new();
+    let mut modes = HashMap::new();
+    for account in &state.accounts {
+        let Some(vault) = &account.vault else {
+            continue;
+        };
+        for item in vault.items.iter().filter(|i| {
+            i.kind == core::ItemKind::SshKey && !i.deleted && !i.ssh_key.private_key.is_empty()
+        }) {
+            let id = ssh_key_id(account, &item.id);
+            let (enabled, mode) = state
+                .ssh_settings
+                .get(&id)
+                .copied()
+                .unwrap_or((true, AskMode::FirstTime));
+            if enabled {
+                keys.push(hushjar_agent::AgentKey {
+                    id: id.clone(),
+                    name: item.name.clone(),
+                    private_key_openssh: hushjar_agent::Zeroizing::new(
+                        item.ssh_key.private_key.clone(),
+                    ),
+                });
+                modes.insert(id, mode);
+            }
+        }
+    }
+    state.bridge.set_keys(keys, modes);
+    win.set_agent_keys(state.bridge.key_count() as i32);
+}
+
+fn render_ssh_settings(win: &AppWindow, st: &Shared) {
+    let state = st.borrow();
+    let shown = match &state.shown {
+        Shown::Item { account, id } => state
+            .item(*account, id)
+            .filter(|i| i.kind == ItemType::SshKey && !i.id.starts_with("new-"))
+            .map(|_| ssh_key_id(&state.accounts[*account], id)),
+        _ => None,
+    };
+    win.set_ssh_visible(shown.is_some() && state.agent.is_ok());
+    let (enabled, mode) = shown
+        .and_then(|id| state.ssh_settings.get(&id).copied())
+        .unwrap_or((true, AskMode::FirstTime));
+    win.set_ssh_enabled(enabled);
+    win.set_ssh_mode(if mode == AskMode::EveryTime { 1 } else { 0 });
+}
+
+fn change_ssh_setting(win: &AppWindow, st: &Shared, change: impl FnOnce(&mut (bool, AskMode))) {
+    {
+        let mut state = st.borrow_mut();
+        let Shown::Item { account, id } = state.shown.clone() else {
+            return;
+        };
+        let key = ssh_key_id(&state.accounts[account], &id);
+        let setting = state
+            .ssh_settings
+            .entry(key)
+            .or_insert((true, AskMode::FirstTime));
+        change(setting);
+    }
+    save_ssh_settings(st);
+    update_agent_keys(win, st);
+    render_ssh_settings(win, st);
+}
+
+fn show_prompt(win: &AppWindow, st: &Shared, prompt: Prompt) {
+    st.borrow_mut().prompts.push_back(prompt);
+    render_prompt(win, st);
+    use slint::winit_030::WinitWindowAccessor;
+    win.window().with_winit_window(|w| {
+        w.request_user_attention(Some(
+            slint::winit_030::winit::window::UserAttentionType::Critical,
+        ));
+    });
+}
+
+fn render_prompt(win: &AppWindow, st: &Shared) {
+    let text = st
+        .borrow()
+        .prompts
+        .front()
+        .map(|p| p.text.clone())
+        .unwrap_or_default();
+    win.set_ssh_prompt(text.into());
 }
 
 fn toast(win: &AppWindow, st: &Shared, text: &str) {
@@ -969,8 +1187,13 @@ fn add_blank_website(item: &mut Item) {
 fn handle_event(win: &AppWindow, st: &Shared, id: &str, event: Event) {
     if id.is_empty() {
         handle_sign_in_event(win, st, event);
-        return;
+    } else {
+        handle_account_event(win, st, id, event);
     }
+    update_agent_keys(win, st);
+}
+
+fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event: Event) {
     let Some(index) = st.borrow().account_index(id) else {
         return;
     };
@@ -1620,6 +1843,7 @@ fn render(win: &AppWindow, st: &Shared) {
             win.set_folders(ModelRc::new(VecModel::from(names)));
             win.set_folder_index(folder_index as i32);
             win.set_type_index(type_index as i32);
+            render_ssh_settings(win, st);
             render_header(win, st);
             win.set_mode(PaneMode::Item);
         }

@@ -2148,8 +2148,10 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "getrandom 0.4.3",
+ "hushjar-agent",
  "hushjar-core",
  "png",
+ "serde_json",
  "slint",
  "slint-build",
  "zeroize",

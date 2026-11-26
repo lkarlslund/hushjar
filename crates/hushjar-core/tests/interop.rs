@@ -468,10 +468,40 @@ fn seed_demo_account() {
     items.push(id);
     let mut ssh = Item::new(ItemKind::SshKey, None, Some(code));
     ssh.name = "Deploy key".into();
-    ssh.ssh_key.public_key =
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleOnlyNotARealKey demo".into();
-    ssh.ssh_key.fingerprint = "SHA256:q9Vb3L1kz7cYpQ2mXoW8eR4tN6uA0sDfGhJk5lZxC1E".into();
-    ssh.ssh_key.private_key = "(example private key, not a real one)".into();
+    // A real, throwaway key when ssh-keygen is available, so the SSH agent
+    // can be tried; otherwise a placeholder the agent skips.
+    let keydir =
+        std::env::temp_dir().join(format!("hushjar-seed-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&keydir).unwrap();
+    let keyfile = keydir.join("demo");
+    let made = std::process::Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-C", "hushjar demo", "-f"])
+        .arg(&keyfile)
+        .status()
+        .is_ok_and(|s| s.success());
+    if made {
+        ssh.ssh_key.private_key = std::fs::read_to_string(&keyfile).unwrap();
+        ssh.ssh_key.public_key = std::fs::read_to_string(keyfile.with_extension("pub"))
+            .unwrap()
+            .trim()
+            .to_string();
+        let out = std::process::Command::new("ssh-keygen")
+            .arg("-lf")
+            .arg(keyfile.with_extension("pub"))
+            .output()
+            .unwrap();
+        let line = String::from_utf8_lossy(&out.stdout).to_string();
+        ssh.ssh_key.fingerprint = line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or_default()
+            .to_string();
+    } else {
+        ssh.ssh_key.public_key =
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleOnlyNotARealKey demo".into();
+        ssh.ssh_key.private_key = "(example private key, not a real one)".into();
+    }
+    std::fs::remove_dir_all(&keydir).unwrap();
     items.push(ssh);
     for item in &items {
         session.save(&store, item).unwrap();
