@@ -14,7 +14,19 @@ hushjar-core.workspace = true
 png = { version = "0.18", optional = true }
 serde_json = "1.0.154"
 slint.workspace = true
+thiserror = "2"
 zeroize = "1.9.2"
+
+# Desktop integration over D-Bus (src/desktop). All of these are already in
+# the build through Slint (zbus, ksni, resvg) and zbus (futures-lite,
+# async-channel), so they add no new crates. zbus runs on async-io with its
+# own executor thread; no tokio runtime.
+[target.'cfg(target_os = "linux")'.dependencies]
+async-channel = "2"
+futures-lite = "2"
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
+resvg = { version = "0.49", default-features = false }
+zbus = "5"
 
 [build-dependencies]
 embed-resource = "3"
