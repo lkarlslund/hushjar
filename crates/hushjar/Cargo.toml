@@ -16,6 +16,11 @@ serde_json = "1.0.154"
 slint.workspace = true
 zeroize = "1.9.2"
 
+[dev-dependencies]
+# For the worker's test against a Vaultwarden test server.
+ureq = { version = "3.5.2", features = ["json"] }
+uuid = { version = "1.29.3", features = ["v4"] }
+
 [build-dependencies]
 embed-resource = "3"
 slint-build.workspace = true

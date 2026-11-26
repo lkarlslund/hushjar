@@ -258,6 +258,27 @@ pub(super) fn new_item(win: &AppWindow, st: &Shared) -> bool {
                 .find(|x| x.id == *c)
                 .map(|x| x.organization_id.clone())
         });
+        // Organisations can forbid personal items: use a collection instead.
+        let (organization, collection) = match ownership(
+            policies(&s, account),
+            organization.is_some(),
+            s.accounts[account]
+                .vault
+                .as_ref()
+                .map_or(&[][..], |v| &v.collections),
+        ) {
+            Ownership::AsChosen => (organization, collection),
+            Ownership::Collection { organization, id } => (Some(organization), Some(id)),
+            Ownership::NoCollection => {
+                drop(s);
+                toast(
+                    win,
+                    st,
+                    "Your organisation does not allow personal items, and you cannot add to any collection",
+                );
+                return true;
+            }
+        };
         let mut core = core::Item::new(core::ItemKind::Login, organization.clone(), folder);
         if organization.is_some() {
             core.collection_ids = collection.into_iter().collect();

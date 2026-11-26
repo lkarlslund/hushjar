@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hushjar_core::api::{Server, TwoFactorProvider};
+use hushjar_core::policy::Policies;
 use hushjar_core::store::{Profile, Store};
 use hushjar_core::vault::{self as core, Vault};
 use slint::{
@@ -25,6 +26,7 @@ mod edit;
 mod events;
 mod generator;
 mod integration;
+mod live;
 mod settings;
 mod sign_in;
 mod ssh;
@@ -35,6 +37,7 @@ use edit::*;
 use events::*;
 use generator::{Generator, render_generator, show_generator, wire_generator};
 use integration::Integration;
+use live::*;
 use settings::*;
 use sign_in::*;
 use ssh::*;
@@ -93,6 +96,10 @@ struct AccountState {
     synced_at: Option<u64>,
     note: String,
     unlock: UnlockOptions,
+    /// What organisations require of this account, from its last sync.
+    policies: Option<Policies>,
+    /// Why live updates keep failing, when they do.
+    live_problem: Option<String>,
 }
 
 /// Ways to unlock an account other than the master password.
@@ -335,6 +342,8 @@ impl App {
                 synced_at: None,
                 note: String::new(),
                 unlock: UnlockOptions::default(),
+                policies: None,
+                live_problem: None,
             });
         }
         let bridge = Arc::new(Bridge::new(|prompt| {
@@ -464,11 +473,6 @@ impl State {
         }
     }
 
-    /// The longest timeout organisation policies allow, if any.
-    fn policy_idle_limit(&self) -> Option<Duration> {
-        None
-    }
-
     fn current_totp_period(&self) -> u64 {
         if let Shown::Item { account, id } = &self.shown
             && let Some(item) = self.item(*account, id)
@@ -534,7 +538,7 @@ fn leave_to(win: &AppWindow, st: &Shared, then: Pending) -> bool {
 
 /// Locks, or logs out, every unlocked account after the idle time.
 fn time_out_all(win: &AppWindow, st: &Shared) {
-    let log_out = st.borrow().prefs.lock_action == LockAction::LogOut;
+    let log_out = st.borrow().timeout_action() == LockAction::LogOut;
     if log_out {
         let s = st.borrow();
         for a in &s.accounts {
