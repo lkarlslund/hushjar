@@ -11,9 +11,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 
-use crate::AppWindow;
+use crate::{AppWindow, LoginRequestData, SignInForm, UnlockData};
 
 /// A step: its file name, what to do, and how long to wait before capturing.
 type Step = (&'static str, fn(&AppWindow), u64);
@@ -22,6 +22,32 @@ fn password() -> slint::SharedString {
     std::env::var("HUSHJAR_SNAPSHOT_PASSWORD")
         .unwrap_or_default()
         .into()
+}
+
+/// A sign-in form at `stage`, filled as the app would fill it, for the
+/// stages that need a server to reach.
+fn form(stage: i32, provider_index: i32, key_waiting: bool) -> SignInForm {
+    let strings = |list: &[&str]| {
+        ModelRc::new(VecModel::from(
+            list.iter()
+                .map(|s| (*s).into())
+                .collect::<Vec<slint::SharedString>>(),
+        ))
+    };
+    SignInForm {
+        stage,
+        server_choice: 2,
+        url: "https://vault.example.org".into(),
+        email: "sam@example.org".into(),
+        providers: strings(&["Authenticator", "Email", "YubiKey", "Security key"]),
+        provider_index,
+        kinds: ModelRc::new(VecModel::from(vec![0, 1, 2, 3])),
+        email_hint: "s**@example.org".into(),
+        key_ready: true,
+        key_waiting,
+        phrase: "unlit-cobalt-saddle-tremor-amply".into(),
+        ..SignInForm::default()
+    }
 }
 
 const STEPS: &[Step] = &[
@@ -64,9 +90,55 @@ const STEPS: &[Step] = &[
         },
         800,
     ),
+    (
+        "07a-add-account-email",
+        |w| w.set_sign_in(form(0, 0, false)),
+        500,
+    ),
+    (
+        "07b-two-step-email",
+        |w| w.set_sign_in(form(1, 1, false)),
+        500,
+    ),
+    (
+        "07c-two-step-yubikey",
+        |w| w.set_sign_in(form(1, 2, false)),
+        500,
+    ),
+    ("07d-security-key", |w| w.set_sign_in(form(1, 3, true)), 500),
+    ("07e-new-device", |w| w.set_sign_in(form(2, 0, false)), 500),
+    (
+        "07f-device-login",
+        |w| w.set_sign_in(form(3, 0, false)),
+        500,
+    ),
+    (
+        "07g-login-request",
+        |w| {
+            let data = w.global::<LoginRequestData>();
+            data.set_account("sam@example.org".into());
+            data.set_origin("Windows at 192.0.2.4".into());
+            data.set_phrase("unlit-cobalt-saddle-tremor-amply".into());
+            data.set_more(1);
+            data.set_visible(true);
+        },
+        500,
+    ),
     // Leaves time for an SSH signing request from outside, then allows it.
-    ("08-ssh-prompt", |_| {}, 4000),
+    (
+        "08-ssh-prompt",
+        |w| w.global::<LoginRequestData>().set_visible(false),
+        4000,
+    ),
     ("09-ssh-allowed", |w| w.invoke_ssh_answer(true), 800),
+    // Back to the account pane, with its fingerprint phrase.
+    ("09b-account", |w| w.invoke_sign_in_cancel(), 1500),
+    ("10-locked-again", |w| w.invoke_lock_all(), 1500),
+    (
+        "10b-locked-pin",
+        |w| w.global::<UnlockData>().set_pin_available(true),
+        500,
+    ),
 ];
 
 pub fn run(window: &AppWindow, dir: PathBuf) -> Rc<Timer> {

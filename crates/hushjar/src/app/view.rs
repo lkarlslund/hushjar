@@ -192,9 +192,11 @@ pub(super) fn render(win: &AppWindow, st: &Shared) {
                 return;
             };
             win.set_summary(summary);
+            render_account_fingerprint(win, st, account);
             win.set_mode(PaneMode::Account);
         }
         Shown::Locked(account) => {
+            render_unlock(win, st, account);
             let st = st.borrow();
             let Some(a) = st.accounts.get(account) else {
                 return;

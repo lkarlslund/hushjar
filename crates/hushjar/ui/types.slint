@@ -81,7 +81,8 @@ export struct GroupSummary {
 }
 
 // The add-account form. Stage 0 asks for the server, email and password;
-// stage 1 asks for a two-step login code.
+// stage 1 for two-step login; stage 2 for the code that confirms a new
+// device; stage 3 waits while another device approves the login.
 export struct SignInForm {
     stage: int,
     server-choice: int,
@@ -91,7 +92,16 @@ export struct SignInForm {
     busy: bool,
     providers: [string],
     provider-index: int,
-    email-provider: bool,
+    // Per provider: 0 authenticator app, 1 email, 2 YubiKey, 3 security key.
+    kinds: [int],
+    // The partly hidden address email codes go to.
+    email-hint: string,
+    // The server sent what a security key needs.
+    key-ready: bool,
+    // Waiting for a touch on the security key.
+    key-waiting: bool,
+    // Logging in with a device: the phrase to compare.
+    phrase: string,
     reconnect: bool,
 }
 

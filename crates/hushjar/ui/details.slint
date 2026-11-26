@@ -1,5 +1,6 @@
 import { ScrollView, LineEdit, TextEdit, ComboBox } from "std-widgets.slint";
 import { SignInPane, AccountPane } from "panes.slint";
+import { UnlockData, PinUnlockForm } from "access.slint";
 import { SettingsPane } from "settings.slint";
 import { GeneratorPane } from "generator.slint";
 import { TransferPane } from "transfer.slint";
@@ -372,7 +373,7 @@ export component DetailsPane inherits Rectangle {
             font-size: Theme.small;
             color: Theme.muted;
         }
-        HorizontalLayout {
+        if !UnlockData.pin-available || UnlockData.use-password: HorizontalLayout {
             alignment: center;
             spacing: 8px;
             unlock-field := LineEdit {
@@ -397,6 +398,10 @@ export component DetailsPane inherits Rectangle {
                     unlock-field.text = "";
                 }
             }
+        }
+        if UnlockData.pin-available: PinUnlockForm {
+            busy: root.busy;
+            focus-request: root.unlock-focus-request;
         }
         if root.unlock-error != "": Text {
             text: root.unlock-error;

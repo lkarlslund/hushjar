@@ -2,6 +2,7 @@ import { LineEdit, CheckBox, ScrollView } from "std-widgets.slint";
 import { Theme, Icons } from "theme.slint";
 import { Icon, ActionButton, Avatar, Segmented } from "widgets.slint";
 import { SignInForm, AccountSummary } from "types.slint";
+import { SignInData, AccountData, FingerprintNote } from "access.slint";
 
 component Card inherits Rectangle {
     background: Theme.surface;
@@ -36,6 +37,7 @@ export component SignInPane inherits Rectangle {
 
     property <int> choice: root.form.server-choice;
     property <int> provider: root.form.provider-index;
+    property <int> kind: root.form.kinds[root.form.provider-index];
 
     background: Theme.window;
 
@@ -58,7 +60,10 @@ export component SignInPane inherits Rectangle {
                         Icon { source: Icons.jar; width: 26px; height: 26px; tint: Theme.honey; }
                     }
                     Text {
-                        text: root.form.reconnect ? "Sign in again" : root.form.stage == 0 ? "Add an account" : "Two-step login";
+                        text: root.form.stage == 1 ? "Two-step login"
+                            : root.form.stage == 2 ? "Confirm this device"
+                            : root.form.stage == 3 ? "Log in with a device"
+                            : root.form.reconnect ? "Sign in again" : "Add an account";
                         font-size: 18px;
                         font-weight: 600;
                         color: Theme.text;
@@ -110,6 +115,14 @@ export component SignInPane inherits Rectangle {
                             clicked => { root.submit(root.choice, url.text, email.text, password.text); }
                         }
                     }
+                    if email.text != "": HorizontalLayout {
+                        alignment: start;
+                        ActionButton {
+                            text: "Log in with a device";
+                            enabled: !root.form.busy;
+                            clicked => { SignInData.device-login(root.choice, url.text, email.text); }
+                        }
+                    }
                     Text {
                         text: "Your master password never leaves this computer; only a hash of it is sent.";
                         font-size: Theme.small;
@@ -124,17 +137,30 @@ export component SignInPane inherits Rectangle {
                     if root.form.providers.length > 1: Segmented {
                         options: root.form.providers;
                         current: root.provider;
-                        picked(index) => { root.provider = index; }
+                        picked(index) => { SignInData.pick-provider(index); }
                     }
                     Text {
-                        text: root.form.email-provider
-                            ? "Enter the code sent to your email, or ask for a new one."
-                            : "Enter the code from your authenticator app.";
+                        text: root.kind == 1
+                            ? (root.form.email-hint != ""
+                                ? "Enter the code sent to " + root.form.email-hint + ", or ask for a new one."
+                                : "Enter the code sent to your email, or ask for a new one.")
+                            : root.kind == 2 ? "Touch your YubiKey. It types its code into the box below."
+                            : root.kind == 3
+                                ? (root.form.key-waiting ? "Touch your security key…"
+                                    : root.form.key-ready ? "Plug in your security key, then select Use security key."
+                                    : "This server did not offer security key sign-in to Hushjar. Choose another method.")
+                            : "Enter the 6-digit code from your authenticator app.";
                         wrap: word-wrap;
                         color: Theme.text;
                     }
                     code := LineEdit {
-                        placeholder-text: "Code";
+                        property <int> watched: root.kind;
+                        changed watched => {
+                            if self.watched == 2 { self.focus(); }
+                        }
+                        visible: root.kind != 3;
+                        height: root.kind != 3 ? self.preferred-height : 0px;
+                        placeholder-text: root.kind == 2 ? "YubiKey code" : "Code";
                         accepted => { root.submit-code(root.provider, self.text, remember.checked); }
                     }
                     remember := CheckBox {
@@ -145,10 +171,55 @@ export component SignInPane inherits Rectangle {
                     HorizontalLayout {
                         spacing: 8px;
                         alignment: end;
-                        if root.form.email-provider: ActionButton {
+                        if root.kind == 1: ActionButton {
                             text: "Email me a code";
                             enabled: !root.form.busy;
                             clicked => { root.send-email(root.provider); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        if !root.form.key-waiting: ActionButton {
+                            text: "Cancel";
+                            clicked => { root.cancel(); }
+                        }
+                        if root.form.key-waiting: ActionButton {
+                            text: "Cancel";
+                            clicked => { SignInData.stop-security-key(); }
+                        }
+                        if root.kind != 3: ActionButton {
+                            text: root.form.busy ? "Checking…" : "Continue";
+                            primary: true;
+                            enabled: !root.form.busy;
+                            clicked => { root.submit-code(root.provider, code.text, remember.checked); }
+                        }
+                        if root.kind == 3 && !root.form.key-waiting: ActionButton {
+                            text: root.form.busy ? "Checking…" : "Use security key";
+                            primary: true;
+                            enabled: !root.form.busy && root.form.key-ready;
+                            clicked => { SignInData.use-security-key(remember.checked); }
+                        }
+                    }
+                }
+
+                if root.form.stage == 2: VerticalLayout {
+                    spacing: 10px;
+
+                    Text {
+                        text: "Bitwarden emailed a code to " + root.form.email + " to confirm that this computer may sign in. Enter it below.";
+                        wrap: word-wrap;
+                        color: Theme.text;
+                    }
+                    device-code := LineEdit {
+                        placeholder-text: "Code from the email";
+                        accepted => { SignInData.submit-device-code(self.text); }
+                    }
+                    if root.form.error != "": ErrorText { text: root.form.error; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        ActionButton {
+                            text: "Send a new code";
+                            enabled: !root.form.busy;
+                            clicked => { SignInData.resend-device-code(); }
                         }
                         Rectangle { horizontal-stretch: 1; }
                         ActionButton {
@@ -159,7 +230,37 @@ export component SignInPane inherits Rectangle {
                             text: root.form.busy ? "Checking…" : "Continue";
                             primary: true;
                             enabled: !root.form.busy;
-                            clicked => { root.submit-code(root.provider, code.text, remember.checked); }
+                            clicked => { SignInData.submit-device-code(device-code.text); }
+                        }
+                    }
+                }
+
+                if root.form.stage == 3: VerticalLayout {
+                    spacing: 10px;
+
+                    Text {
+                        text: "Approve this login on a device where " + root.form.email + " is signed in, such as the Bitwarden app or another Hushjar. Check that it shows this fingerprint phrase:";
+                        wrap: word-wrap;
+                        color: Theme.text;
+                    }
+                    Text {
+                        text: root.form.phrase;
+                        wrap: word-wrap;
+                        font-size: 15px;
+                        font-weight: 600;
+                        color: Theme.text;
+                    }
+                    Text {
+                        text: "Waiting for approval on another device…";
+                        font-size: Theme.small;
+                        color: Theme.muted;
+                    }
+                    if root.form.error != "": ErrorText { text: root.form.error; }
+                    HorizontalLayout {
+                        alignment: end;
+                        ActionButton {
+                            text: "Cancel";
+                            clicked => { root.cancel(); }
                         }
                     }
                 }
@@ -210,6 +311,11 @@ export component AccountPane inherits Rectangle {
             font-size: Theme.small;
             color: root.account.needs-sign-in ? Theme.danger : Theme.faint;
             wrap: word-wrap;
+        }
+
+        if AccountData.fingerprint != "": HorizontalLayout {
+            alignment: center;
+            FingerprintNote { width: min(420px, root.width - 32px); }
         }
 
         if !root.confirming: HorizontalLayout {

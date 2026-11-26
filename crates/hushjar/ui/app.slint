@@ -5,6 +5,7 @@ import { VaultTree } from "tree.slint";
 import { DetailsPane } from "details.slint";
 import { SettingsData, AccountSecurity } from "settings.slint";
 import { GeneratorData, GeneratedValue } from "generator.slint";
+import { SignInData, UnlockData, AccountData, LoginRequestData, LoginRequestBanner } from "access.slint";
 import { TransferData } from "transfer.slint";
 import { SendsData, SendRow } from "sends.slint";
 import {
@@ -17,6 +18,7 @@ export {
     RowIcon, RowKind, SignInForm, TreeRow, Palette, SettingsData, AccountSecurity, GeneratorData, GeneratedValue, TransferData,
     SendsData, SendRow,
 }
+export { SignInData, UnlockData, AccountData, LoginRequestData }
 
 component TopBar inherits Rectangle {
     in property <string> sync-text;
@@ -405,6 +407,13 @@ export component AppWindow inherits Window {
                 ActionButton { text: "Allow"; primary: true; clicked => { root.ssh-answer(true); } }
             }
         }
+    }
+
+    // Another device asks to sign in; waits while an SSH prompt shows.
+    if root.ssh-prompt == "": LoginRequestBanner {
+        x: (parent.width - self.width) / 2;
+        y: 52px;
+        width: min(560px, parent.width - 32px);
     }
 
     // Toast

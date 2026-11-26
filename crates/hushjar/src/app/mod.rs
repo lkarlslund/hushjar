@@ -7,10 +7,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use hushjar_core::api::{Server, TwoFactorProvider};
+use hushjar_core::api::{Device, Server, TwoFactorChallenge, TwoFactorProvider};
 use hushjar_core::policy::Policies;
 use hushjar_core::store::{Profile, Store};
 use hushjar_core::vault::{self as core, Vault};
+use hushjar_core::webauthn::Cancel;
 use slint::{
     Color, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak,
 };
@@ -27,11 +28,13 @@ mod events;
 mod generator;
 mod integration;
 mod live;
+mod login_requests;
 mod sends;
 mod settings;
 mod sign_in;
 mod ssh;
 mod transfer;
+mod unlock;
 mod view;
 mod wire;
 
@@ -40,6 +43,7 @@ use events::*;
 use generator::{Generator, render_generator, show_generator, wire_generator};
 use integration::{Integration, close_requested, sync_prompt_note, update_tray_status};
 use live::*;
+use login_requests::*;
 use sends::{Sends, forget_sends, render_sends, show_sends, wire_sends};
 use settings::*;
 use sign_in::*;
@@ -47,6 +51,7 @@ use ssh::*;
 use transfer::{
     Transfer, forget_transfer, handle_transfer_event, render_transfer, show_transfer, wire_transfer,
 };
+use unlock::*;
 use view::*;
 use wire::*;
 
@@ -116,6 +121,11 @@ struct AccountState {
 #[derive(Clone, Copy, Debug, Default)]
 struct UnlockOptions {
     pin: bool,
+    /// The PIN is kept only until Hushjar quits.
+    pin_in_memory: bool,
+    /// Logged out (by the timeout or the server): there is no offline copy
+    /// for a PIN to open until the master password signs in again.
+    logged_out: bool,
     system_auth: bool,
 }
 
@@ -131,6 +141,22 @@ struct SignIn {
     password: Zeroizing<String>,
     server: Option<Server>,
     worker: Option<Worker>,
+    /// The device a new account signs in as; the same for every retry.
+    device: Device,
+    /// What the server asked for in two-step login.
+    challenge: Option<TwoFactorChallenge>,
+    provider_index: usize,
+    /// Set while the security key waits for a touch; cancels the wait.
+    key_cancel: Option<Cancel>,
+    /// Logging in with a device: the fingerprint phrase to compare.
+    phrase: String,
+    /// Two-step login after another device approved.
+    via_device: bool,
+    /// A device-login poll is on its way to the worker.
+    polling: bool,
+    /// Signing in again for this saved, logged-out account (its ID). Its own
+    /// worker does the work and its events go to this form.
+    existing: Option<String>,
 }
 
 pub struct State {
@@ -164,6 +190,8 @@ pub struct State {
     scheme_forced: bool,
     desktop: Integration,
     generator: Generator,
+    /// Login requests from other devices and account fingerprints.
+    access: Access,
     transfer: Transfer,
     sends: Sends,
 }
@@ -404,6 +432,7 @@ impl App {
             scheme_forced: false,
             desktop: Integration::new(),
             generator,
+            access: Access::default(),
             transfer: Transfer::default(),
             sends: Sends::default(),
         }));
@@ -419,6 +448,7 @@ impl App {
         wire(&app.window, &state);
         wire_settings(&app.window, &state);
         wire_generator(&app.window, &state);
+        wire_access(&app.window, &state);
         wire_transfer(&app.window, &state);
         {
             let st = state.clone();
@@ -480,7 +510,7 @@ impl App {
             }
         });
         Ok(Self {
-            _timers: vec![ticker],
+            _timers: vec![ticker, access_timer(&app.window, &state)],
             ..app
         })
     }
@@ -642,5 +672,6 @@ fn handle_event(win: &AppWindow, st: &Shared, id: &str, event: Event) {
         handle_account_event(win, st, id, event);
     }
     update_agent_keys(win, st);
+    render_login_request(win, st);
     update_tray_status(st);
 }
