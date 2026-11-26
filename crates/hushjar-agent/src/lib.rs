@@ -1,8 +1,10 @@
 //! An OpenSSH agent that serves SSH keys supplied by Hushjar, asking the app
 //! to approve each signing request.
 //!
-//! The agent listens on a Unix socket (Linux and macOS). Programs such as
-//! `ssh`, `git` and `ssh-keygen -Y sign` find it through `SSH_AUTH_SOCK`.
+//! The agent listens on a Unix socket (Linux and macOS) or a named pipe
+//! (Windows). Programs such as `ssh`, `git` and `ssh-keygen -Y sign` find the
+//! socket through `SSH_AUTH_SOCK`; Windows OpenSSH uses the pipe
+//! `\\.\pipe\openssh-ssh-agent` without any setting.
 //!
 //! - **Keys** come from a [`KeySource`] that the agent asks on every request,
 //!   so switching a key off or locking the account takes effect at once.
@@ -14,15 +16,22 @@
 //!   answered with failure, because keys are managed in the vault.
 //!
 //! Only connections from processes running as the same user are served
-//! (checked with the socket's peer credentials).
+//! (checked with the socket's peer credentials; on Windows the pipe's access
+//! list admits only the user and the system).
 
 #![forbid(unsafe_code)]
 
-// Only the Unix server uses these; on other platforms they are built (and
+// Only the socket and pipe servers use these; on other platforms they are built (and
 // unit tested) but unused.
-#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "macos", windows)),
+    allow(dead_code)
+)]
 mod keys;
-#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "macos", windows)),
+    allow(dead_code)
+)]
 mod proto;
 mod server;
 
@@ -173,8 +182,8 @@ pub trait Approver: Send + Sync {
 /// Why the agent could not start.
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    /// The agent supports Unix sockets on Linux and macOS only (Windows
-    /// named pipes are not implemented).
+    /// The agent supports Unix sockets (Linux, macOS) and Windows named
+    /// pipes only.
     #[error("the SSH agent is not supported on this platform")]
     Unsupported,
     /// The socket directory is not private to the current user.
@@ -219,7 +228,13 @@ impl fmt::Debug for Agent {
 }
 
 impl Agent {
-    /// Starts listening on `socket`.
+    /// Starts listening on `socket`: a Unix socket path, or on Windows a
+    /// named pipe path such as `\\.\pipe\openssh-ssh-agent` (the pipe is
+    /// restricted to the current user; starting fails with
+    /// [`AgentError::InUse`] when the pipe exists, for example while the
+    /// Windows OpenSSH Authentication Agent service runs).
+    ///
+    /// For a Unix socket:
     ///
     /// The socket's directory is created with mode 0700 if it is missing; an
     /// existing directory must be owned by the current user and not be
@@ -256,7 +271,27 @@ impl Drop for Agent {
 ///
 /// On macOS, where `XDG_RUNTIME_DIR` is usually unset, falls back to the
 /// per-user `$TMPDIR/hushjar/ssh-agent.sock`. Returns `None` when neither is
-/// set to an absolute path, and on platforms without Unix socket support.
+/// set to an absolute path, and on platforms the agent does not support.
+///
+/// On Windows it is the pipe `\\.\pipe\openssh-ssh-agent`, which OpenSSH
+/// uses by default. The environment variable `HUSHJAR_SSH_AGENT_PIPE`
+/// replaces it, either with a full pipe path or just a pipe name.
+#[cfg(windows)]
+pub fn default_socket_path() -> Option<PathBuf> {
+    const PREFIX: &str = r"\\.\pipe\";
+    let name = std::env::var("HUSHJAR_SSH_AGENT_PIPE")
+        .ok()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "openssh-ssh-agent".into());
+    if name.starts_with(PREFIX) {
+        Some(PathBuf::from(name))
+    } else {
+        Some(PathBuf::from(format!("{PREFIX}{name}")))
+    }
+}
+
+/// See the Windows variant above.
+#[cfg(not(windows))]
 pub fn default_socket_path() -> Option<PathBuf> {
     if !server::SUPPORTED {
         return None;
@@ -280,6 +315,7 @@ pub fn default_socket_path() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    #[cfg(not(windows))]
     #[test]
     fn default_socket_path_ends_in_hushjar_dir() {
         if let Some(path) = default_socket_path() {
@@ -288,7 +324,19 @@ mod tests {
         }
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    #[test]
+    fn default_pipe_is_the_openssh_pipe() {
+        // Skips the override, which another test may set.
+        if std::env::var_os("HUSHJAR_SSH_AGENT_PIPE").is_none() {
+            assert_eq!(
+                default_socket_path(),
+                Some(PathBuf::from(r"\\.\pipe\openssh-ssh-agent"))
+            );
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     #[test]
     fn start_is_unsupported() {
         struct Nothing;

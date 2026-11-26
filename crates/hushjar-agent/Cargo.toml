@@ -28,6 +28,17 @@ rustix = { version = "1.1.6", features = ["event", "fs", "net", "process"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 nix = { version = "0.31.4", default-features = false, features = ["socket", "user"] }
 
+[target.'cfg(windows)'.dependencies]
+# Named pipe server. Its unsafe code is the reason this crate can stay
+# `forbid(unsafe_code)`: no hand-written Win32 calls are needed, because the
+# pipe, its security descriptor and the client's process ID all come from it.
+interprocess = "2.4.10"
+# For the pipe's security descriptor string.
+widestring = "1.0.2"
+# Maps a client's process ID to its executable path for the approval prompt.
+# Only the process list is needed, not disks, networks or users.
+sysinfo = { version = "0.40.4", default-features = false, features = ["system"] }
+
 [dev-dependencies]
 getrandom = { version = "0.4", features = ["sys_rng"] }
 # Only to make a passphrase-protected key in a test.

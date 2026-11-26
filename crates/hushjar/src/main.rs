@@ -1,3 +1,6 @@
+// A release build on Windows is a GUI program: no console window opens.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 slint::include_modules!();
 
 mod app;
