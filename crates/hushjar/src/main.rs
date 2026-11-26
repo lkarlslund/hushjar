@@ -10,6 +10,7 @@ mod exchange;
 #[cfg(test)]
 mod mock;
 mod model;
+mod pacing;
 mod prefs;
 #[cfg(feature = "snapshot")]
 mod snapshot;

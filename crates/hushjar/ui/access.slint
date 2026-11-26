@@ -1,0 +1,176 @@
+// Signing in and unlocking beyond the master password: two-step login
+// methods, new-device codes, logging in with another device, approving
+// other devices' logins, PIN unlock and the account fingerprint.
+
+import { LineEdit } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { Icon, ActionButton, Toggle } from "widgets.slint";
+
+// Actions on the sign-in form besides submitting it.
+export global SignInData {
+    callback pick-provider(int);
+    // Starts asking the security key; the argument is "remember this device".
+    callback use-security-key(bool);
+    callback stop-security-key();
+    // Server choice, self-hosted address, email.
+    callback device-login(int, string, string);
+    callback submit-device-code(string);
+    callback resend-device-code();
+}
+
+// The locked pane's PIN unlock.
+export global UnlockData {
+    in property <bool> pin-available;
+    in-out property <bool> use-password;
+    // A key is kept and the system can confirm the user.
+    in property <bool> system-auth-available;
+    callback unlock-with-pin(string);
+    callback unlock-with-system();
+}
+
+// The account pane's fingerprint phrase.
+export global AccountData {
+    in property <string> fingerprint;
+}
+
+// The login request from another device shown now, if any.
+export global LoginRequestData {
+    in property <bool> visible;
+    in property <string> account;
+    in property <string> origin;
+    in property <string> phrase;
+    // Further requests waiting after this one.
+    in property <int> more;
+    callback answer(bool);
+}
+
+// The PIN form on the locked pane, with the switch back to the password.
+export component PinUnlockForm inherits VerticalLayout {
+    in property <bool> busy;
+    in property <int> focus-request;
+    spacing: 10px;
+
+    if !UnlockData.use-password: HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        pin-field := LineEdit {
+            property <int> request: root.focus-request;
+            changed request => { self.focus(); }
+            width: 200px;
+            input-type: InputType.password;
+            placeholder-text: "PIN";
+            accepted(text) => {
+                UnlockData.unlock-with-pin(text);
+                self.text = "";
+            }
+        }
+        ActionButton {
+            text: root.busy ? "Unlocking…" : "Unlock with PIN";
+            enabled: !root.busy;
+            primary: true;
+            has-icon: true;
+            icon: Icons.lock;
+            clicked => {
+                UnlockData.unlock-with-pin(pin-field.text);
+                pin-field.text = "";
+            }
+        }
+    }
+    HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        Text {
+            text: "Use master password";
+            vertical-alignment: center;
+            font-size: Theme.small;
+            color: Theme.muted;
+        }
+        Toggle {
+            checked: UnlockData.use-password;
+            toggled => { UnlockData.use-password = self.checked; }
+        }
+    }
+}
+
+// The account fingerprint on the account pane.
+export component FingerprintNote inherits VerticalLayout {
+    spacing: 4px;
+    Text {
+        text: "Fingerprint phrase";
+        horizontal-alignment: center;
+        font-size: Theme.small;
+        color: Theme.muted;
+    }
+    Text {
+        text: AccountData.fingerprint;
+        horizontal-alignment: center;
+        font-weight: 600;
+        color: Theme.text;
+        wrap: word-wrap;
+    }
+    Text {
+        text: "An organisation admin or emergency contact may ask you for this phrase to confirm it is really your account.";
+        horizontal-alignment: center;
+        font-size: Theme.small;
+        color: Theme.faint;
+        wrap: word-wrap;
+    }
+}
+
+// Asks whether to approve another device's login, like the SSH prompt.
+export component LoginRequestBanner inherits Rectangle {
+    visible: LoginRequestData.visible;
+    height: LoginRequestData.visible ? banner-layout.preferred-height : 0px;
+    border-radius: Theme.radius;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.honey;
+    drop-shadow-blur: 18px;
+    drop-shadow-color: #00000055;
+    accessible-role: groupbox;
+    accessible-label: "Login request";
+
+    banner-layout := VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 10px;
+            VerticalLayout {
+                alignment: start;
+                Icon { source: Icons.lock; width: 22px; height: 22px; tint: Theme.honey; }
+            }
+            VerticalLayout {
+                spacing: 4px;
+                horizontal-stretch: 1;
+                Text {
+                    text: LoginRequestData.origin + " wants to sign in to " + LoginRequestData.account + ".";
+                    wrap: word-wrap;
+                    color: Theme.text;
+                }
+                Text {
+                    text: "Approve only if you started it and the other device shows this fingerprint phrase:";
+                    wrap: word-wrap;
+                    font-size: Theme.small;
+                    color: Theme.muted;
+                }
+                Text {
+                    text: LoginRequestData.phrase;
+                    wrap: word-wrap;
+                    font-weight: 600;
+                    color: Theme.text;
+                }
+                if LoginRequestData.more > 0: Text {
+                    text: LoginRequestData.more == 1 ? "1 more request waiting" : LoginRequestData.more + " more requests waiting";
+                    font-size: Theme.small;
+                    color: Theme.faint;
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            ActionButton { text: "Deny"; danger: true; clicked => { LoginRequestData.answer(false); } }
+            ActionButton { text: "Approve"; primary: true; clicked => { LoginRequestData.answer(true); } }
+        }
+    }
+}

@@ -12,8 +12,12 @@ The plan, including a checklist of Bitwarden features, is in
 ## What works
 
 - Several accounts at once, each on its own server (bitwarden.com, bitwarden.eu
-  or self-hosted), with two-step login by authenticator app or email.
-- Unlocking from an encrypted offline copy, then syncing in the background.
+  or self-hosted), with two-step login by authenticator app, email, YubiKey or
+  security key, and the emailed code that confirms a new device.
+- Logging in with another device, and approving other devices' login
+  requests after comparing fingerprint phrases.
+- Unlocking from an encrypted offline copy, with the master password or a
+  PIN, then syncing in the background.
 - A filterable tree grouped by folders, collections or types, and a details
   pane that switches to editing in place.
 - Viewing and editing logins, cards, identities, notes and SSH keys, with

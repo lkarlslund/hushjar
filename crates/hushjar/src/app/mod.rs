@@ -7,9 +7,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use hushjar_core::api::{Server, TwoFactorProvider};
+use hushjar_core::api::{Device, Server, TwoFactorChallenge, TwoFactorProvider};
+use hushjar_core::policy::Policies;
 use hushjar_core::store::{Profile, Store};
 use hushjar_core::vault::{self as core, Vault};
+use hushjar_core::webauthn::Cancel;
 use slint::{
     Color, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak,
 };
@@ -26,10 +28,15 @@ mod events;
 mod extras;
 mod generator;
 mod integration;
+mod live;
+mod login_requests;
+mod sends;
 mod settings;
 mod sign_in;
 mod ssh;
+mod sysunlock;
 mod transfer;
+mod unlock;
 mod view;
 mod wire;
 
@@ -41,12 +48,16 @@ use extras::{
 };
 use generator::{Generator, render_generator, show_generator, wire_generator};
 use integration::{Integration, close_requested, sync_prompt_note, update_tray_status};
+use live::*;
+use login_requests::*;
+use sends::{Sends, forget_sends, render_sends, show_sends, wire_sends};
 use settings::*;
 use sign_in::*;
 use ssh::*;
 use transfer::{
     Transfer, forget_transfer, handle_transfer_event, render_transfer, show_transfer, wire_transfer,
 };
+use unlock::*;
 use view::*;
 use wire::*;
 
@@ -66,6 +77,7 @@ enum Shown {
     Settings,
     Generator,
     Transfer,
+    Sends,
 }
 
 struct Draft {
@@ -91,6 +103,7 @@ enum Pending {
     Settings,
     Generator,
     Transfer,
+    Sends,
 }
 
 struct AccountState {
@@ -104,12 +117,21 @@ struct AccountState {
     synced_at: Option<u64>,
     note: String,
     unlock: UnlockOptions,
+    /// What organisations require of this account, from its last sync.
+    policies: Option<Policies>,
+    /// Why live updates keep failing, when they do.
+    live_problem: Option<String>,
 }
 
 /// Ways to unlock an account other than the master password.
 #[derive(Clone, Copy, Debug, Default)]
 struct UnlockOptions {
     pin: bool,
+    /// The PIN is kept only until Hushjar quits.
+    pin_in_memory: bool,
+    /// Logged out (by the timeout or the server): there is no offline copy
+    /// for a PIN to open until the master password signs in again.
+    logged_out: bool,
     system_auth: bool,
 }
 
@@ -125,6 +147,22 @@ struct SignIn {
     password: Zeroizing<String>,
     server: Option<Server>,
     worker: Option<Worker>,
+    /// The device a new account signs in as; the same for every retry.
+    device: Device,
+    /// What the server asked for in two-step login.
+    challenge: Option<TwoFactorChallenge>,
+    provider_index: usize,
+    /// Set while the security key waits for a touch; cancels the wait.
+    key_cancel: Option<Cancel>,
+    /// Logging in with a device: the fingerprint phrase to compare.
+    phrase: String,
+    /// Two-step login after another device approved.
+    via_device: bool,
+    /// A device-login poll is on its way to the worker.
+    polling: bool,
+    /// Signing in again for this saved, logged-out account (its ID). Its own
+    /// worker does the work and its events go to this form.
+    existing: Option<String>,
 }
 
 pub struct State {
@@ -153,12 +191,19 @@ pub struct State {
     prompts: VecDeque<Prompt>,
     /// Per SSH key ("account/item"): offered to the agent, and when to ask.
     ssh_settings: HashMap<String, (bool, AskMode)>,
+    /// User keys kept for unlocking with system authentication.
+    key_holder: Arc<crate::desktop::sysauth::KeyHolder>,
+    /// Accounts that unlock with system authentication.
+    system_auth: HashSet<String>,
     prefs: Prefs,
-    /// The desktop's own colour scheme, for the "System" theme.
-    system_scheme: slint::language::ColorScheme,
+    /// Whether a light or dark theme was forced on the window.
+    scheme_forced: bool,
     desktop: Integration,
     generator: Generator,
+    /// Login requests from other devices and account fingerprints.
+    access: Access,
     transfer: Transfer,
+    sends: Sends,
     /// Item and folder actions: re-prompt, attachments, moves, SSH tools.
     extras: Extras,
 }
@@ -349,6 +394,8 @@ impl App {
                 synced_at: None,
                 note: String::new(),
                 unlock: UnlockOptions::default(),
+                policies: None,
+                live_problem: None,
             });
         }
         let bridge = Arc::new(Bridge::new(|prompt| {
@@ -368,9 +415,12 @@ impl App {
             None => Err("the SSH agent is not available on this system yet".into()),
         };
         let ssh_settings = load_ssh_settings(&store);
+        let system_auth = sysunlock::load_enabled(&store);
+        for a in &mut accounts {
+            a.unlock.system_auth = system_auth.contains(&a.profile.id);
+        }
         let prefs = Prefs::from_settings(&store.read_settings());
         let generator = Generator::from_settings(&store.read_settings());
-        let system_scheme = window.global::<crate::Palette>().get_color_scheme();
         let state: Shared = Rc::new(RefCell::new(State {
             store,
             accounts,
@@ -394,11 +444,15 @@ impl App {
             agent,
             prompts: VecDeque::new(),
             ssh_settings,
+            key_holder: sysunlock::new_holder(),
+            system_auth,
             prefs,
-            system_scheme,
+            scheme_forced: false,
             desktop: Integration::new(),
             generator,
+            access: Access::default(),
             transfer: Transfer::default(),
+            sends: Sends::default(),
             extras: Extras::default(),
         }));
         CONTEXT.with(|c| *c.borrow_mut() = Some((window.as_weak(), state.clone())));
@@ -412,7 +466,9 @@ impl App {
         };
         wire(&app.window, &state);
         wire_settings(&app.window, &state);
+        sysunlock::wire(&app.window, &state);
         wire_generator(&app.window, &state);
+        wire_access(&app.window, &state);
         wire_transfer(&app.window, &state);
         wire_extras(&app.window, &state);
         {
@@ -422,6 +478,7 @@ impl App {
                 .on_close_requested(move || close_requested(&st));
         }
         update_tray_status(&state);
+        wire_sends(&app.window, &state);
         apply_prefs(&app.window, &state);
         refresh_tree(&app.window, &state);
         let first = state
@@ -474,7 +531,7 @@ impl App {
             }
         });
         Ok(Self {
-            _timers: vec![ticker],
+            _timers: vec![ticker, access_timer(&app.window, &state)],
             ..app
         })
     }
@@ -508,11 +565,6 @@ impl State {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }
-    }
-
-    /// The longest timeout organisation policies allow, if any.
-    fn policy_idle_limit(&self) -> Option<Duration> {
-        None
     }
 
     fn current_totp_period(&self) -> u64 {
@@ -580,8 +632,17 @@ fn leave_to(win: &AppWindow, st: &Shared, then: Pending) -> bool {
 
 /// Locks, or logs out, every unlocked account after the idle time.
 fn time_out_all(win: &AppWindow, st: &Shared) {
-    let log_out = st.borrow().prefs.lock_action == LockAction::LogOut;
+    let log_out = st.borrow().timeout_action() == LockAction::LogOut;
     if log_out {
+        let ids: Vec<String> = st
+            .borrow()
+            .accounts
+            .iter()
+            .map(|a| a.profile.id.clone())
+            .collect();
+        for id in ids {
+            sysunlock::forget(st, &id);
+        }
         let s = st.borrow();
         for a in &s.accounts {
             if a.vault.is_some() {
@@ -641,5 +702,6 @@ fn handle_event(win: &AppWindow, st: &Shared, id: &str, event: Event) {
         handle_account_event(win, st, id, event);
     }
     update_agent_keys(win, st);
+    render_login_request(win, st);
     update_tray_status(st);
 }

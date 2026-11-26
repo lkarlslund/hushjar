@@ -269,7 +269,11 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
         }
     });
     on!(on_generate, |win, st, section: i32, field: i32| {
-        let password = match st.borrow().generator.secret() {
+        let secret = {
+            let state = st.borrow();
+            state.generator.secret(state.generator_policy().as_ref())
+        };
+        let password = match secret {
             Ok(p) => p,
             Err(message) => {
                 toast(
@@ -389,48 +393,14 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
                           provider: i32,
                           code: SharedString,
                           remember: bool| {
-        let mut state = st.borrow_mut();
-        let si = &mut state.sign_in;
-        let (Some(server), Some(worker)) = (si.server.clone(), si.worker.as_ref()) else {
-            return;
-        };
-        let Some(provider) = si.providers.get(provider as usize).copied() else {
-            return;
-        };
-        if code.trim().is_empty() {
-            si.error = "Enter the code".into();
-        } else {
-            si.busy = true;
-            si.error.clear();
-            let _ = worker.tx.send(Command::SignIn {
-                server,
-                email: si.email.clone(),
-                password: si.password.clone(),
-                second: Some((provider, code.trim().to_string(), remember)),
-            });
-        }
-        drop(state);
-        render_sign_in(&win, st);
+        sign_in_code(&win, st, provider, &code, remember);
     });
     on!(on_sign_in_email, |win, st, provider: i32| {
         let _ = provider;
-        let state = st.borrow();
-        let si = &state.sign_in;
-        if let (Some(server), Some(worker)) = (si.server.clone(), si.worker.as_ref()) {
-            let _ = worker.tx.send(Command::SendEmailCode {
-                server,
-                email: si.email.clone(),
-                password: si.password.clone(),
-            });
-        }
+        send_email_code(st);
     });
     on!(on_sign_in_cancel, |win, st| {
-        st.borrow_mut().sign_in = SignIn::default();
-        let first = st.borrow().accounts.first().map(|a| a.profile.id.clone());
-        match first {
-            Some(key) => select(&win, st, &key),
-            None => show_sign_in(&win, st),
-        }
+        cancel_sign_in(&win, st);
     });
     on!(on_account_sync, |win, st| {
         if let Shown::Account(account) = st.borrow().shown.clone() {
@@ -568,6 +538,9 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
     });
     on!(on_open_transfer, |win, st| {
         show_transfer(&win, st);
+    });
+    on!(on_open_sends, |win, st| {
+        show_sends(&win, st);
     });
     on!(on_open_settings, |win, st| {
         show_settings(&win, st);

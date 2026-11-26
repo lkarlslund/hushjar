@@ -134,6 +134,8 @@ pub(super) fn account_summary(a: &AccountState) -> AccountSummary {
         "Offline: sign in again to sync".to_string()
     } else if !a.note.is_empty() {
         a.note.clone()
+    } else if let Some(problem) = &a.live_problem {
+        format!("Live updates are not working ({problem})")
     } else {
         relative(a.synced_at)
     };
@@ -154,6 +156,9 @@ pub(super) fn render(win: &AppWindow, st: &Shared) {
     let shown = st.borrow().shown.clone();
     let editing = st.borrow().editing_shown();
     render_extras(win, st);
+    if shown != Shown::Sends && st.borrow().sends.has_draft() {
+        forget_sends(win, st);
+    }
     win.set_editing(editing);
     win.set_leave_pending(st.borrow().pending.is_some());
     win.set_dirty(st.borrow().draft.as_ref().is_some_and(Draft::dirty));
@@ -171,6 +176,10 @@ pub(super) fn render(win: &AppWindow, st: &Shared) {
             render_generator(win, st);
             win.set_mode(PaneMode::Generator);
         }
+        Shown::Sends => {
+            render_sends(win, st);
+            win.set_mode(PaneMode::Sends);
+        }
         Shown::Settings => {
             render_settings(win, st);
             win.set_mode(PaneMode::Settings);
@@ -184,9 +193,11 @@ pub(super) fn render(win: &AppWindow, st: &Shared) {
                 return;
             };
             win.set_summary(summary);
+            render_account_fingerprint(win, st, account);
             win.set_mode(PaneMode::Account);
         }
         Shown::Locked(account) => {
+            render_unlock(win, st, account);
             let st = st.borrow();
             let Some(a) = st.accounts.get(account) else {
                 return;

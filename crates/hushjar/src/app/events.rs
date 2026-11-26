@@ -6,8 +6,17 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
     let Some(index) = st.borrow().account_index(id) else {
         return;
     };
+    if sign_in_takes(st, id, &event) {
+        return handle_sign_in_event(win, st, event);
+    }
+    let synced = matches!(event, Event::Synced { .. });
+    if matches!(event, Event::SaveUncertain { .. }) && st.borrow().shown == Shown::Sends {
+        sends::save_uncertain(win, st, index);
+    }
     match event {
+        Event::SendSaved { send, vault, link } => sends::saved(win, st, index, *send, vault, link),
         Event::Unlocked { vault, synced_at } | Event::Synced { vault, synced_at } => {
+            sysunlock::after_unlock(st, index);
             let first_unlock;
             {
                 let mut state = st.borrow_mut();
@@ -18,6 +27,7 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
                 a.synced_at = synced_at.or(a.synced_at);
                 a.busy = false;
                 a.note.clear();
+                a.unlock.logged_out = false;
                 if !first_unlock {
                     a.needs_sign_in = false;
                     a.two_factor.clear();
@@ -38,6 +48,9 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
                 render(win, st);
             }
             update_sync_text(win, st);
+            if synced {
+                check_login_requests(st, index);
+            }
         }
         Event::NeedsSignIn { two_factor } => {
             {
@@ -139,33 +152,43 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
                 render(win, st);
             }
         }
-        Event::Locked => {
-            forget_extras(st, index);
+        Event::Locked => locked(win, st, index),
+        Event::LoggedOutByServer => {
+            sysunlock::forget(st, id);
             {
                 let mut state = st.borrow_mut();
-                let a = &mut state.accounts[index];
-                a.view = Account::locked(&a.profile);
-                a.vault = None;
-                a.busy = false;
-                if state.draft.as_ref().is_some_and(|d| d.account == index) {
-                    state.draft = None;
-                }
-                let affected = match &state.shown {
-                    Shown::Item { account, .. } | Shown::Account(account) => *account == index,
-                    Shown::Group(key) => state.row(key).is_some_and(|r| r.account == index),
-                    _ => false,
-                };
-                if affected {
-                    state.shown = Shown::Locked(index);
-                    state.selected = Some(state.accounts[index].profile.id.clone());
-                }
+                state.accounts[index].note =
+                    "Signed out by the server: unlock to sign in again".into();
+                state.accounts[index].unlock.logged_out = true;
+                state.generator.forget_history();
             }
-            refresh_tree(win, st);
-            render(win, st);
+            locked(win, st, index);
+            let email = st.borrow().accounts[index].profile.email.clone();
+            toast(
+                win,
+                st,
+                &format!("{email} was signed out by the server. Unlock it to sign in again."),
+            );
             update_sync_text(win, st);
         }
+        Event::Policies(policies) => {
+            st.borrow_mut().accounts[index].policies = Some(*policies);
+            // The settings and generator panes show what policies require.
+            if matches!(st.borrow().shown, Shown::Settings | Shown::Generator) {
+                render(win, st);
+            }
+        }
+        Event::LoginRequest { .. } => check_login_requests(st, index),
+        Event::LiveStatus { problem } => {
+            st.borrow_mut().accounts[index].live_problem = problem;
+            if matches!(st.borrow().shown, Shown::Account(i) if i == index) {
+                render(win, st);
+            }
+        }
+        Event::UserKey(key) => sysunlock::key_arrived(st, index, key),
         Event::Removed => {
             forget_extras(st, index);
+            sysunlock::forget(st, id);
             {
                 let mut state = st.borrow_mut();
                 let email = state.accounts[index].profile.email.clone();
@@ -183,7 +206,25 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
                 None => show_sign_in(win, st),
             }
         }
-        Event::SignedIn { .. } | Event::TwoFactorRequired { .. } | Event::EmailSent => {}
+        Event::UnlockNeedsSignIn {
+            challenge,
+            password,
+        } => continue_unlock_on_form(win, st, index, challenge, password),
+        Event::LoginRequests { requests } => login_requests_event(win, st, index, requests),
+        Event::LoginRequestAnswered { approved } => login_answered_event(win, st, approved),
+        Event::AccountFingerprint { phrase } => fingerprint_event(win, st, index, phrase),
+        Event::PinState {
+            stored,
+            held,
+            offline_copy,
+        } => pin_state_event(win, st, index, stored, held, offline_copy),
+        Event::SignedIn { .. }
+        | Event::TwoFactorRequired { .. }
+        | Event::EmailSent
+        | Event::NewDeviceRequired
+        | Event::DeviceLoginStarted { .. }
+        | Event::DeviceLoginWaiting
+        | Event::DeviceLoginEnded { .. } => {}
         event @ (Event::PasswordVerified | Event::PasswordRejected)
             if waiting_for_reprompt(st, index) =>
         {
@@ -202,89 +243,30 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
     }
 }
 
-pub(super) fn handle_sign_in_event(win: &AppWindow, st: &Shared, event: Event) {
-    match event {
-        Event::SignedIn {
-            profile,
-            vault,
-            synced_at,
-        } => {
-            let profile = *profile;
-            let key = profile.id.clone();
-            let email = profile.email.clone();
-            {
-                let mut state = st.borrow_mut();
-                // The worker that signed in keeps the session and becomes
-                // this account's worker; it now reports under the account's ID.
-                let Some(worker) = state.sign_in.worker.take() else {
-                    return;
-                };
-                state.sign_in = SignIn::default();
-                if let Some(existing) = state.account_index(&key) {
-                    state.accounts.remove(existing);
-                }
-                let view = Account::from_vault(&profile, &vault);
-                state.accounts.push(AccountState {
-                    profile,
-                    view,
-                    vault: Some(vault),
-                    worker,
-                    busy: false,
-                    needs_sign_in: false,
-                    two_factor: vec![],
-                    synced_at,
-                    note: String::new(),
-                    unlock: UnlockOptions::default(),
-                });
-                state.expanded.insert(key.clone());
-            }
-            refresh_tree(win, st);
-            select(win, st, &key);
-            update_sync_text(win, st);
-            toast(win, st, &format!("Signed in as {email}"));
+/// An account is locked, by the user, a timeout or the server.
+fn locked(win: &AppWindow, st: &Shared, index: usize) {
+    forget_extras(st, index);
+    {
+        let mut state = st.borrow_mut();
+        let a = &mut state.accounts[index];
+        a.view = Account::locked(&a.profile);
+        a.vault = None;
+        a.busy = false;
+        a.live_problem = None;
+        if state.draft.as_ref().is_some_and(|d| d.account == index) {
+            state.draft = None;
         }
-        Event::TwoFactorRequired { providers } => {
-            {
-                let mut state = st.borrow_mut();
-                let si = &mut state.sign_in;
-                si.busy = false;
-                let supported: Vec<_> = providers
-                    .into_iter()
-                    .filter(|p| {
-                        p.supported()
-                            && !matches!(
-                                p,
-                                TwoFactorProvider::YubiKey | TwoFactorProvider::WebAuthn
-                            )
-                    })
-                    .collect();
-                if si.stage == 1 {
-                    si.error = "That code was not accepted".into();
-                } else if supported.is_empty() {
-                    si.error =
-                        "This account uses a two-step login method Hushjar does not support yet"
-                            .into();
-                } else {
-                    si.stage = 1;
-                    si.error.clear();
-                }
-                if !supported.is_empty() {
-                    si.providers = supported;
-                }
-            }
-            render_sign_in(win, st);
+        let affected = match &state.shown {
+            Shown::Item { account, .. } | Shown::Account(account) => *account == index,
+            Shown::Group(key) => state.row(key).is_some_and(|r| r.account == index),
+            _ => false,
+        };
+        if affected {
+            state.shown = Shown::Locked(index);
+            state.selected = Some(state.accounts[index].profile.id.clone());
         }
-        Event::EmailSent => {
-            toast(win, st, "A code is on its way to your email");
-        }
-        Event::Failed { message } => {
-            {
-                let mut state = st.borrow_mut();
-                state.sign_in.busy = false;
-                state.sign_in.error = message;
-            }
-            render_sign_in(win, st);
-        }
-        _ => {}
     }
+    refresh_tree(win, st);
+    render(win, st);
+    update_sync_text(win, st);
 }

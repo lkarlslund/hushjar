@@ -73,8 +73,8 @@ pub(super) struct Transfer {
 /// vault ("disable personal vault export"). Another job wires the real
 /// policy in here; until then nothing is forbidden. The pane disables the
 /// personal-vault export and explains why when this returns true.
-fn personal_export_disabled(_state: &State, _account: usize) -> bool {
-    false
+fn personal_export_disabled(state: &State, account: usize) -> bool {
+    policies(state, account).is_some_and(|p| p.personal_export_disabled)
 }
 
 /// Indices into `State::accounts` of the unlocked accounts.
