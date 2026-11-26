@@ -70,5 +70,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         app.window.show()?;
     }
     slint::run_event_loop_until_quit()?;
+    app.forget_opened_files();
     Ok(())
 }

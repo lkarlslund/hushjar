@@ -140,6 +140,7 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
             }
         }
         Event::Locked => {
+            forget_extras(st, index);
             {
                 let mut state = st.borrow_mut();
                 let a = &mut state.accounts[index];
@@ -164,6 +165,7 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
             update_sync_text(win, st);
         }
         Event::Removed => {
+            forget_extras(st, index);
             {
                 let mut state = st.borrow_mut();
                 let email = state.accounts[index].profile.email.clone();
@@ -182,6 +184,14 @@ pub(super) fn handle_account_event(win: &AppWindow, st: &Shared, id: &str, event
             }
         }
         Event::SignedIn { .. } | Event::TwoFactorRequired { .. } | Event::EmailSent => {}
+        event @ (Event::PasswordVerified | Event::PasswordRejected)
+            if waiting_for_reprompt(st, index) =>
+        {
+            handle_extras_event(win, st, index, event)
+        }
+        event @ (Event::ItemActionDone { .. }
+        | Event::ItemActionFailed { .. }
+        | Event::AttachmentWritten { .. }) => handle_extras_event(win, st, index, event),
         event @ (Event::PasswordVerified
         | Event::PasswordRejected
         | Event::Exported { .. }

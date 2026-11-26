@@ -23,6 +23,7 @@ use crate::tree::{self, GroupBy, Row};
 use crate::worker::{Command, Event, Worker};
 mod edit;
 mod events;
+mod extras;
 mod generator;
 mod integration;
 mod settings;
@@ -34,6 +35,10 @@ mod wire;
 
 use edit::*;
 use events::*;
+use extras::{
+    Extras, forget_extras, handle_extras_event, private_key_edited, render_extras, shown_detail,
+    waiting_for_reprompt, wire_extras,
+};
 use generator::{Generator, render_generator, show_generator, wire_generator};
 use integration::{Integration, close_requested, sync_prompt_note, update_tray_status};
 use settings::*;
@@ -154,6 +159,8 @@ pub struct State {
     desktop: Integration,
     generator: Generator,
     transfer: Transfer,
+    /// Item and folder actions: re-prompt, attachments, moves, SSH tools.
+    extras: Extras,
 }
 
 type Shared = Rc<RefCell<State>>;
@@ -392,6 +399,7 @@ impl App {
             desktop: Integration::new(),
             generator,
             transfer: Transfer::default(),
+            extras: Extras::default(),
         }));
         CONTEXT.with(|c| *c.borrow_mut() = Some((window.as_weak(), state.clone())));
         window.set_rows(ModelRc::from(state.borrow().rows_model.clone()));
@@ -406,6 +414,7 @@ impl App {
         wire_settings(&app.window, &state);
         wire_generator(&app.window, &state);
         wire_transfer(&app.window, &state);
+        wire_extras(&app.window, &state);
         {
             let st = state.clone();
             app.window

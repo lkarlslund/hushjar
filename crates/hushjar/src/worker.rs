@@ -18,6 +18,8 @@ use zeroize::Zeroizing;
 
 use crate::exchange::{ExportFormat, ExportScope};
 
+mod items;
+
 pub enum Command {
     SignIn {
         server: Server,
@@ -67,6 +69,49 @@ pub enum Command {
     },
     Import {
         parsed: Box<ParsedImport>,
+    },
+    // Item and folder actions; see `items`.
+    Archive(String),
+    Unarchive(String),
+    RemovePasskey {
+        item: String,
+        credential: String,
+    },
+    MoveToOrganization {
+        item: String,
+        organization: String,
+        collections: Vec<String>,
+    },
+    SetCollections {
+        item: String,
+        collections: Vec<String>,
+    },
+    RenameFolder {
+        id: String,
+        name: String,
+    },
+    /// Renames a folder and the folders nested in it.
+    RenameFolderTree {
+        old: String,
+        new: String,
+    },
+    DeleteFolder(String),
+    /// Downloads an attachment and writes it, readable by its owner only,
+    /// to `path`; `open` is passed back so the UI can open it.
+    DownloadAttachment {
+        item: String,
+        attachment: String,
+        path: PathBuf,
+        open: bool,
+    },
+    /// Reads the file at `path` and attaches it to the item.
+    AddAttachment {
+        item: String,
+        path: PathBuf,
+    },
+    DeleteAttachment {
+        item: String,
+        attachment: String,
     },
 }
 
@@ -132,6 +177,20 @@ pub enum Event {
     /// An export or import step failed; the message is for the transfer pane.
     TransferFailed {
         message: String,
+    },
+    /// An item or folder action finished; the message is for a toast.
+    ItemActionDone {
+        vault: Vault,
+        message: String,
+    },
+    /// An item or folder action failed. An empty message has already been
+    /// explained (for example by [`Event::NeedsSignIn`]).
+    ItemActionFailed {
+        message: String,
+    },
+    AttachmentWritten {
+        path: PathBuf,
+        open: bool,
     },
 }
 
@@ -396,6 +455,19 @@ fn run(
                 password,
             } => emit(parse_import(session.as_ref(), &bytes, format, password)),
             Command::Import { parsed } => import_items(&mut session, &store, &emit, &parsed),
+            command @ (Command::Archive(_)
+            | Command::Unarchive(_)
+            | Command::RemovePasskey { .. }
+            | Command::MoveToOrganization { .. }
+            | Command::SetCollections { .. }
+            | Command::RenameFolder { .. }
+            | Command::RenameFolderTree { .. }
+            | Command::DeleteFolder(_)
+            | Command::DownloadAttachment { .. }
+            | Command::AddAttachment { .. }
+            | Command::DeleteAttachment { .. }) => {
+                items::run(session.as_mut(), &store, &emit, command)
+            }
             Command::Remove => {
                 drop(session.take());
                 if let Some(p) = &profile {
