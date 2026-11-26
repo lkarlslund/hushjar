@@ -564,6 +564,9 @@ pub(super) fn wire(w: &AppWindow, state: &Shared) {
     on!(on_open_transfer, |win, st| {
         show_transfer(&win, st);
     });
+    on!(on_open_sends, |win, st| {
+        show_sends(&win, st);
+    });
     on!(on_open_settings, |win, st| {
         show_settings(&win, st);
     });

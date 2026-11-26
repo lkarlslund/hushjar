@@ -1,0 +1,344 @@
+import { ScrollView, LineEdit, TextEdit } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { Icon, ActionButton, Avatar, Toggle, Picker } from "widgets.slint";
+import { Card, Row, Hint, PaneTitle } from "cards.slint";
+
+// One Send in the list.
+export struct SendRow {
+    name: string,
+    // 0 text, 1 file, 2 a type this version cannot open
+    kind: int,
+    // The account's avatar, shown only when several accounts are unlocked.
+    show-account: bool,
+    initials: string,
+    tint: color,
+    chips: [string],
+}
+
+// Everything the Send pane shows and edits. The form fields are in-out
+// properties that Rust reads when Save is pressed.
+export global SendsData {
+    in property <[SendRow]> rows;
+    in property <int> selected: -1;
+    in property <string> message;
+    in property <bool> blocked;
+    in property <bool> busy;
+
+    // The form. `editing` is false while nothing is selected.
+    in property <bool> editing;
+    in property <bool> is-new;
+    in property <int> kind;
+    in property <string> account-label;
+    in property <[string]> account-options;
+    in property <int> account-index;
+    in property <[string]> deletion-options;
+    in-out property <int> deletion-index;
+    in property <[string]> expiry-options;
+    in-out property <int> expiry-index;
+    in property <string> file-info;
+    in property <bool> has-password;
+    in property <bool> can-copy-link;
+    in property <string> views-note;
+    in-out property <string> name;
+    in-out property <string> text;
+    in-out property <bool> hide-text;
+    in-out property <string> notes;
+    in-out property <string> max-views;
+    in-out property <string> password;
+    in-out property <bool> remove-password;
+    in-out property <bool> hide-email;
+    in-out property <bool> disabled;
+
+    callback new-text();
+    callback new-file();
+    callback select(int);
+    callback account-picked(int);
+    callback pick-file();
+    callback save();
+    callback copy-link();
+    callback delete();
+    callback close();
+}
+
+component Chip inherits Rectangle {
+    in property <string> text;
+    in property <bool> warn;
+    border-radius: 9px;
+    background: root.warn ? Theme.danger.with-alpha(0.15) : Theme.hover;
+    height: 18px;
+    HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 7px;
+        Text {
+            text: root.text;
+            font-size: Theme.small;
+            vertical-alignment: center;
+            color: root.warn ? Theme.danger : Theme.muted;
+        }
+    }
+}
+
+component SendListRow inherits Rectangle {
+    in property <SendRow> send;
+    in property <bool> selected;
+    callback clicked();
+    height: 50px;
+    border-radius: 6px;
+    background: root.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                source: root.send.kind == 1 ? Icons.archive : Icons.note;
+                width: 18px;
+                height: 18px;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 3px;
+            Text {
+                text: root.send.name;
+                color: Theme.text;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: 5px;
+                alignment: start;
+                for chip in root.send.chips: Chip {
+                    text: chip;
+                    warn: chip == "Disabled" || chip == "Expired";
+                }
+            }
+        }
+        if root.send.show-account: VerticalLayout {
+            alignment: center;
+            Avatar { initials: root.send.initials; tint: root.send.tint; size: 22px; }
+        }
+    }
+}
+
+component Form inherits VerticalLayout {
+    spacing: 12px;
+    property <bool> confirming;
+
+    if SendsData.is-new && SendsData.account-options.length > 1: Row {
+        label: "Account";
+        hint: "Which account keeps this Send.";
+        Picker {
+            options: SendsData.account-options;
+            current: SendsData.account-index;
+            picked(i) => { SendsData.account-picked(i); }
+        }
+    }
+    if !SendsData.is-new && SendsData.account-label != "": Hint { text: SendsData.account-label; }
+
+    VerticalLayout {
+        spacing: 4px;
+        Text { text: "Name"; font-size: Theme.small; color: Theme.muted; }
+        LineEdit { text <=> SendsData.name; placeholder-text: "What is this Send?"; }
+    }
+
+    if SendsData.kind == 0: VerticalLayout {
+        spacing: 4px;
+        Text { text: "Text to share"; font-size: Theme.small; color: Theme.muted; }
+        TextEdit { text <=> SendsData.text; height: 110px; wrap: word-wrap; }
+        Row {
+            label: "Hide the text by default";
+            hint: "The person must click to show it.";
+            Toggle { checked: SendsData.hide-text; toggled => { SendsData.hide-text = self.checked; } }
+        }
+    }
+    if SendsData.kind == 1: Row {
+        label: SendsData.file-info;
+        hint: SendsData.is-new ? "" : "A file cannot be changed. Make a new Send to share another file.";
+        if SendsData.is-new: ActionButton {
+            text: "Choose a file…";
+            clicked => { SendsData.pick-file(); }
+        }
+    }
+
+    Row {
+        label: "Delete this Send";
+        hint: "After this time the server removes it.";
+        Picker {
+            options: SendsData.deletion-options;
+            current: SendsData.deletion-index;
+            picked(i) => { SendsData.deletion-index = i; }
+        }
+    }
+    Row {
+        label: "Stop sharing";
+        hint: "After this time nobody can open it, but it stays in your list.";
+        Picker {
+            options: SendsData.expiry-options;
+            current: SendsData.expiry-index;
+            picked(i) => { SendsData.expiry-index = i; }
+        }
+    }
+    Row {
+        label: "Most times it can be opened";
+        hint: SendsData.views-note != "" ? SendsData.views-note : "Leave empty for no limit.";
+        LineEdit {
+            text <=> SendsData.max-views;
+            input-type: InputType.number;
+            placeholder-text: "No limit";
+            width: 110px;
+        }
+    }
+    VerticalLayout {
+        spacing: 4px;
+        Text {
+            text: SendsData.has-password ? "Password (one is set; type to change it)" : "Password (optional)";
+            font-size: Theme.small;
+            color: Theme.muted;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            LineEdit {
+                text <=> SendsData.password;
+                input-type: InputType.password;
+                placeholder-text: SendsData.has-password ? "New password" : "Ask for a password";
+                horizontal-stretch: 1;
+                enabled: !SendsData.remove-password;
+            }
+            if SendsData.has-password: ActionButton {
+                text: SendsData.remove-password ? "Keep it" : "Remove it";
+                clicked => {
+                    SendsData.remove-password = !SendsData.remove-password;
+                    SendsData.password = "";
+                }
+            }
+        }
+    }
+    Row {
+        label: "Hide my email";
+        hint: "People who open the Send will not see who made it.";
+        Toggle { checked: SendsData.hide-email; toggled => { SendsData.hide-email = self.checked; } }
+    }
+    Row {
+        label: "Turn it off";
+        hint: "Nobody can open it until you turn it on again.";
+        Toggle { checked: SendsData.disabled; toggled => { SendsData.disabled = self.checked; } }
+    }
+    VerticalLayout {
+        spacing: 4px;
+        Text { text: "Private notes"; font-size: Theme.small; color: Theme.muted; }
+        TextEdit { text <=> SendsData.notes; height: 70px; wrap: word-wrap; }
+    }
+
+    if !root.confirming: HorizontalLayout {
+        spacing: 8px;
+        ActionButton {
+            text: SendsData.busy ? "Saving…" : "Save";
+            primary: true;
+            enabled: !SendsData.busy && !SendsData.blocked;
+            clicked => { SendsData.save(); }
+        }
+        ActionButton {
+            text: "Copy link";
+            has-icon: true;
+            icon: Icons.copy;
+            enabled: SendsData.can-copy-link && !SendsData.busy;
+            clicked => { SendsData.copy-link(); }
+        }
+        ActionButton { text: SendsData.is-new ? "Cancel" : "Close"; clicked => { SendsData.close(); } }
+        Rectangle { horizontal-stretch: 1; }
+        if !SendsData.is-new: ActionButton {
+            text: "Delete…";
+            danger: true;
+            enabled: !SendsData.busy;
+            clicked => { root.confirming = true; }
+        }
+    }
+    if root.confirming: VerticalLayout {
+        spacing: 8px;
+        Text {
+            text: "Delete this Send now? The link stops working for everyone.";
+            wrap: word-wrap;
+            color: Theme.text;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            ActionButton { text: "Keep it"; clicked => { root.confirming = false; } }
+            ActionButton {
+                text: "Delete";
+                danger: true;
+                clicked => {
+                    root.confirming = false;
+                    SendsData.delete();
+                }
+            }
+        }
+    }
+}
+
+export component SendsPane inherits Rectangle {
+    background: Theme.window;
+
+    ScrollView {
+        VerticalLayout {
+            alignment: start;
+            padding: 16px;
+            padding-top: 20px;
+            spacing: 14px;
+
+            PaneTitle { icon: Icons.send; text: "Send"; }
+            Hint { text: "Share text or a file through a link. Only people with the link can open it."; }
+
+            if SendsData.message != "": Card {
+                Text {
+                    text: SendsData.message;
+                    wrap: word-wrap;
+                    color: SendsData.blocked ? Theme.danger : Theme.text;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                ActionButton {
+                    text: "New text Send";
+                    has-icon: true;
+                    icon: Icons.plus;
+                    enabled: !SendsData.blocked;
+                    clicked => { SendsData.new-text(); }
+                }
+                ActionButton {
+                    text: "New file Send";
+                    has-icon: true;
+                    icon: Icons.plus;
+                    enabled: !SendsData.blocked;
+                    clicked => { SendsData.new-file(); }
+                }
+            }
+
+            Card {
+                title: "Your Sends";
+                if SendsData.rows.length == 0: Hint { text: "You have no Sends yet."; }
+                VerticalLayout {
+                    spacing: 2px;
+                    for send[i] in SendsData.rows: SendListRow {
+                        send: send;
+                        selected: i == SendsData.selected;
+                        clicked => { SendsData.select(i); }
+                    }
+                }
+            }
+
+            if SendsData.editing: Card {
+                title: SendsData.is-new ? (SendsData.kind == 1 ? "New file Send" : "New text Send") : "Edit Send";
+                Form {}
+            }
+        }
+    }
+}

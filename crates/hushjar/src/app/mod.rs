@@ -25,6 +25,7 @@ mod edit;
 mod events;
 mod generator;
 mod integration;
+mod sends;
 mod settings;
 mod sign_in;
 mod ssh;
@@ -36,6 +37,7 @@ use edit::*;
 use events::*;
 use generator::{Generator, render_generator, show_generator, wire_generator};
 use integration::{Integration, close_requested, sync_prompt_note, update_tray_status};
+use sends::{Sends, forget_sends, render_sends, show_sends, wire_sends};
 use settings::*;
 use sign_in::*;
 use ssh::*;
@@ -61,6 +63,7 @@ enum Shown {
     Settings,
     Generator,
     Transfer,
+    Sends,
 }
 
 struct Draft {
@@ -86,6 +89,7 @@ enum Pending {
     Settings,
     Generator,
     Transfer,
+    Sends,
 }
 
 struct AccountState {
@@ -154,6 +158,7 @@ pub struct State {
     desktop: Integration,
     generator: Generator,
     transfer: Transfer,
+    sends: Sends,
 }
 
 type Shared = Rc<RefCell<State>>;
@@ -392,6 +397,7 @@ impl App {
             desktop: Integration::new(),
             generator,
             transfer: Transfer::default(),
+            sends: Sends::default(),
         }));
         CONTEXT.with(|c| *c.borrow_mut() = Some((window.as_weak(), state.clone())));
         window.set_rows(ModelRc::from(state.borrow().rows_model.clone()));
@@ -413,6 +419,7 @@ impl App {
                 .on_close_requested(move || close_requested(&st));
         }
         update_tray_status(&state);
+        wire_sends(&app.window, &state);
         apply_prefs(&app.window, &state);
         refresh_tree(&app.window, &state);
         let first = state
