@@ -536,6 +536,12 @@ impl Client {
         .map(|_| ())
     }
 
+    /// Uploads a batch of imported items and folders in one request.
+    pub fn import_ciphers(&self, token: &str, body: &Value) -> Result<(), ApiError> {
+        self.authed("POST", "/ciphers/import", token, Some(body), SMALL_LIMIT)
+            .map(|_| ())
+    }
+
     pub fn create_folder(&self, token: &str, encrypted_name: &str) -> Result<Value, ApiError> {
         let body = json!({ "name": encrypted_name });
         self.authed("POST", "/folders", token, Some(&body), SMALL_LIMIT)

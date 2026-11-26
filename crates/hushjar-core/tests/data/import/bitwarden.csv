@@ -1,0 +1,5 @@
+folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp
+Work,1,login,Intranet,VPN needed,"Pin: 1234
+Team: blue",1,"https://intranet.example.org,https://backup.example.org",sam,bw-pass-1,JBSWY3DPEHPK3PXP
+,,note,Safe code,The code is 12-34-56,,0,,,,
+Work/Code,,login,Git host,,,0,https://git.example.org,sam-dev,bw-pass-2,

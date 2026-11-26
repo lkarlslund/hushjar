@@ -1,0 +1,5 @@
+"Group","Title","Username","Password","URL","Notes","TOTP","Icon","Last Modified","Created"
+"Root/Work","Intranet","sam","kp-pass-1","https://intranet.example.org","VPN needed","JBSWY3DPEHPK3PXP","0","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z"
+"Root/Work/Code","Git host","sam-dev","kp-pass-2","https://git.example.org","","","0","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z"
+"Root","Top level","riley","kp-pass-3","","","","0","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z"
+"Root/Home","","nobody","dropped","","","","0","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z"

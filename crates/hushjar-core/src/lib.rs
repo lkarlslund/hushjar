@@ -5,6 +5,7 @@
 
 pub mod api;
 pub mod crypto;
+pub mod exchange;
 pub mod session;
 pub mod store;
 pub mod totp;
