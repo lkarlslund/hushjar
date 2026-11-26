@@ -1,8 +1,9 @@
 # Hushjar
 
 A desktop app for your secrets, written in Rust with [Slint](https://slint.dev).
-It works with Bitwarden and self-hosted Vaultwarden accounts, targets Linux on
-Wayland first, and is meant to reach Windows, macOS and Android later. It
+It works with Bitwarden and self-hosted Vaultwarden accounts. Linux on Wayland
+is the primary target; Windows and macOS builds are set up and checked by CI
+but have had little hands-on testing, and Android comes later. It
 replaces VaultGoblin, an earlier Go and Wails client.
 
 The plan, including a checklist of Bitwarden features, is in
@@ -43,8 +44,28 @@ cargo clippy --workspace --all-targets
 cargo test --workspace
 ```
 
-`HUSHJAR_DATA_DIR` overrides where accounts are stored (by default
-`~/.local/share/hushjar` on Linux).
+`HUSHJAR_DATA_DIR` overrides where accounts are stored. By default that is
+`~/.local/share/hushjar` on Linux, `~/Library/Application Support/Hushjar` on
+macOS and `%APPDATA%\Hushjar` on Windows.
+
+### Building on each system
+
+- **Linux:** needs the usual Slint libraries (fontconfig, xkbcommon, Wayland or
+  X11, OpenGL/EGL headers; see `.github/workflows/ci.yml` for the Debian
+  package names). `scripts/package-linux.sh` builds a release and writes
+  `dist/hushjar-<version>-linux-<arch>.tar.gz`, laid out as a prefix.
+- **Windows:** needs the MSVC build tools (Visual Studio Build Tools with the
+  C++ workload). `scripts/package-windows.ps1` writes
+  `dist\hushjar-<version>-windows-x86_64.zip`; the icon is embedded in
+  `hushjar.exe` by the build.
+- **macOS:** needs the Xcode command line tools. `scripts/package-macos.sh`
+  writes `dist/Hushjar-<version>-macos-<arch>.zip` containing `Hushjar.app`,
+  signed ad hoc only (Gatekeeper asks on first launch).
+- `scripts/make-icons.sh` regenerates the committed `.ico` and `.icns` from
+  `packaging/linux/io.github.lkarlslund.Hushjar.svg`.
+
+Pushing a tag `v*` makes the release workflow build all three packages and
+attach them to a draft GitHub release.
 
 To show Hushjar with its name and icon in Linux desktops, build a release and
 install its desktop entry for your user:
@@ -54,8 +75,12 @@ cargo build --release -p hushjar
 scripts/install-desktop.sh            # --uninstall removes it
 ```
 
-The SSH agent listens on `$XDG_RUNTIME_DIR/hushjar/ssh-agent.sock`. Click the
-terminal icon in the top bar to copy the `SSH_AUTH_SOCK` line.
+The SSH agent listens on `$XDG_RUNTIME_DIR/hushjar/ssh-agent.sock` (macOS:
+under `$TMPDIR`). Click the terminal icon in the top bar to copy the
+`SSH_AUTH_SOCK` line. On Windows it serves the named pipe
+`\\.\pipe\openssh-ssh-agent`, which Windows OpenSSH uses without any setting;
+stop the "OpenSSH Authentication Agent" service first, or set
+`HUSHJAR_SSH_AGENT_PIPE` to another pipe name.
 
 ### Testing against Vaultwarden
 

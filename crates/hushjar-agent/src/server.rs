@@ -1,25 +1,31 @@
-//! The socket listener. Real on Linux and macOS, a stub elsewhere.
+//! The agent's listener: a Unix socket on Linux and macOS, a named pipe on
+//! Windows, a stub elsewhere.
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod connection;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod peer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix;
+#[cfg(windows)]
+mod windows;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use unix::Server;
+#[cfg(windows)]
+pub(crate) use windows::Server;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) const SUPPORTED: bool = true;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub(crate) const SUPPORTED: bool = false;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub(crate) use unsupported::Server;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod unsupported {
     use std::convert::Infallible;
     use std::path::Path;

@@ -33,7 +33,22 @@ impl Clipboard {
             use arboard::SetExtLinux;
             clipboard.set().exclude_from_history().text(text)
         };
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        let result = {
+            use arboard::SetExtWindows;
+            clipboard
+                .set()
+                .exclude_from_history()
+                .exclude_from_cloud()
+                .exclude_from_monitoring()
+                .text(text)
+        };
+        #[cfg(target_os = "macos")]
+        let result = {
+            use arboard::SetExtApple;
+            clipboard.set().exclude_from_history().text(text)
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         let result = clipboard.set().text(text);
         result.map_err(|e| format!("Could not copy: {e}"))?;
         me.last = Some(Zeroizing::new(text.to_string()));

@@ -1,22 +1,42 @@
 //! Serving one agent connection.
 
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use signature::Verifier;
 use ssh_key::{HashAlg, PublicKey, Signature};
 use zeroize::Zeroizing;
 
-use super::unix::Shared;
 use crate::keys::LoadedKey;
 use crate::proto::{self, DataKind, Request};
-use crate::{HostKey, PeerInfo, SignPurpose, SignRequest};
+use crate::{Approver, HostKey, KeySource, PeerInfo, SignPurpose, SignRequest};
 
-/// How long a connection may sit between messages, or take to send one
-/// (VaultGoblin `internal/sshagent/server.go:78`). Waiting for approval does
-/// not count.
-const IO_TIMEOUT: Duration = Duration::from_secs(60);
+/// State shared by the accept loop and the connection threads.
+pub(super) struct Shared {
+    pub(super) keys: Arc<dyn KeySource>,
+    pub(super) approver: Arc<dyn Approver>,
+    stopping: AtomicBool,
+}
+
+impl Shared {
+    pub(super) fn new(keys: Arc<dyn KeySource>, approver: Arc<dyn Approver>) -> Shared {
+        Shared {
+            keys,
+            approver,
+            stopping: AtomicBool::new(false),
+        }
+    }
+
+    pub(super) fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Most `session-bind` records kept per connection (one per forwarding hop
 /// plus the final login).
 const MAX_BINDINGS: usize = 16;
@@ -38,13 +58,10 @@ struct Session {
 }
 
 /// Reads requests and answers them until the client hangs up, a framing
-/// error occurs or the agent stops.
-pub(super) fn serve(mut stream: UnixStream, peer: &PeerInfo, shared: &Shared) {
-    if stream.set_read_timeout(Some(IO_TIMEOUT)).is_err()
-        || stream.set_write_timeout(Some(IO_TIMEOUT)).is_err()
-    {
-        return;
-    }
+/// error occurs or the agent stops. The caller sets up the stream's idle and
+/// write time limits (VaultGoblin `internal/sshagent/server.go:78`: 60
+/// seconds; waiting for approval does not count).
+pub(super) fn serve<S: Read + Write>(mut stream: S, peer: &PeerInfo, shared: &Shared) {
     let mut session = Session::default();
     loop {
         let mut len = [0u8; 4];
@@ -72,7 +89,7 @@ pub(super) fn serve(mut stream: UnixStream, peer: &PeerInfo, shared: &Shared) {
         let mut framed = Zeroizing::new(Vec::with_capacity(reply.len() + 4));
         framed.extend_from_slice(&reply_len.to_be_bytes());
         framed.extend_from_slice(&reply);
-        if stream.write_all(&framed).is_err() {
+        if stream.write_all(&framed).is_err() || stream.flush().is_err() {
             return;
         }
     }

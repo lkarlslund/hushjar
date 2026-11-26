@@ -17,6 +17,7 @@ slint.workspace = true
 zeroize = "1.9.2"
 
 [build-dependencies]
+embed-resource = "3"
 slint-build.workspace = true
 
 [lints]

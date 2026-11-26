@@ -7,14 +7,14 @@ use std::net::Shutdown;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
-use super::connection;
+use super::connection::{self, Shared};
 use super::peer::{current_uid, peer_info};
 use crate::{AgentError, Approver, KeySource};
 
@@ -27,21 +27,18 @@ const POLL_INTERVAL: Timespec = Timespec {
     tv_nsec: 200_000_000,
 };
 
-/// State shared by the accept loop and the connection threads.
-pub(super) struct Shared {
-    pub(super) keys: Arc<dyn KeySource>,
-    pub(super) approver: Arc<dyn Approver>,
-    stopping: AtomicBool,
-    /// Open connections, so that stopping can shut them down.
+/// How long a connection may sit between messages, or take to send one.
+const IO_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// What the accept loop and the connection threads share on Unix: the common
+/// state plus the open connections, so that stopping can shut them down.
+struct Context {
+    shared: Shared,
     connections: Mutex<HashMap<u64, UnixStream>>,
     next_connection: AtomicU64,
 }
 
-impl Shared {
-    pub(super) fn stopping(&self) -> bool {
-        self.stopping.load(Ordering::SeqCst)
-    }
-
+impl Context {
     fn connections(&self) -> MutexGuard<'_, HashMap<u64, UnixStream>> {
         // A panicking connection thread leaves the map consistent.
         self.connections
@@ -55,7 +52,7 @@ pub(crate) struct Server {
     /// Device and inode of the socket this server created, so that shutdown
     /// removes only its own socket file.
     socket_id: (u64, u64),
-    shared: Arc<Shared>,
+    shared: Arc<Context>,
     accept_thread: Option<JoinHandle<()>>,
 }
 
@@ -88,10 +85,8 @@ impl Server {
         let socket_id = (meta.dev(), meta.ino());
         listener.set_nonblocking(true).map_err(io_error(socket))?;
 
-        let shared = Arc::new(Shared {
-            keys,
-            approver,
-            stopping: AtomicBool::new(false),
+        let shared = Arc::new(Context {
+            shared: Shared::new(keys, approver),
             connections: Mutex::new(HashMap::new()),
             next_connection: AtomicU64::new(0),
         });
@@ -122,7 +117,7 @@ impl Server {
     }
 
     pub(crate) fn shutdown(&mut self) {
-        self.shared.stopping.store(true, Ordering::SeqCst);
+        self.shared.shared.stop();
         if let Some(handle) = self.accept_thread.take() {
             let _ = handle.join();
         }
@@ -188,8 +183,8 @@ fn remove_stale_socket(path: &Path, uid: u32) -> Result<(), AgentError> {
     }
 }
 
-fn accept_loop(listener: &UnixListener, shared: &Arc<Shared>, uid: u32) {
-    while !shared.stopping() {
+fn accept_loop(listener: &UnixListener, shared: &Arc<Context>, uid: u32) {
+    while !shared.shared.stopping() {
         let mut fds = [PollFd::new(listener, PollFlags::IN)];
         match poll(&mut fds, Some(&POLL_INTERVAL)) {
             Ok(0) => continue,
@@ -215,7 +210,7 @@ fn accept_loop(listener: &UnixListener, shared: &Arc<Shared>, uid: u32) {
 
 /// Checks a new connection's credentials and starts its thread. Connections
 /// from other users, or beyond the limit, are closed unanswered.
-fn admit(stream: UnixStream, shared: &Arc<Shared>, uid: u32) {
+fn admit(stream: UnixStream, shared: &Arc<Context>, uid: u32) {
     let Ok(peer) = peer_info(&stream) else {
         return;
     };
@@ -223,7 +218,10 @@ fn admit(stream: UnixStream, shared: &Arc<Shared>, uid: u32) {
         return;
     }
     // Accepted sockets inherit O_NONBLOCK from the listener on macOS.
-    if stream.set_nonblocking(false).is_err() {
+    if stream.set_nonblocking(false).is_err()
+        || stream.set_read_timeout(Some(IO_TIMEOUT)).is_err()
+        || stream.set_write_timeout(Some(IO_TIMEOUT)).is_err()
+    {
         return;
     }
     let Ok(registered) = stream.try_clone() else {
@@ -232,7 +230,7 @@ fn admit(stream: UnixStream, shared: &Arc<Shared>, uid: u32) {
     let id = shared.next_connection.fetch_add(1, Ordering::Relaxed);
     {
         let mut connections = shared.connections();
-        if connections.len() >= MAX_CONNECTIONS || shared.stopping() {
+        if connections.len() >= MAX_CONNECTIONS || shared.shared.stopping() {
             return;
         }
         connections.insert(id, registered);
@@ -241,7 +239,7 @@ fn admit(stream: UnixStream, shared: &Arc<Shared>, uid: u32) {
     let spawned = thread::Builder::new()
         .name("hushjar-agent-conn".into())
         .spawn(move || {
-            connection::serve(stream, &peer, &thread_shared);
+            connection::serve(stream, &peer, &thread_shared.shared);
             thread_shared.connections().remove(&id);
         });
     if spawned.is_err() {
