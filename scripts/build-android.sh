@@ -65,9 +65,13 @@ llvm=$ndk/toolchains/llvm/prebuilt/$host/bin
 # build script, and finds the SDK through these.
 export ANDROID_HOME=$sdk ANDROID_NDK_ROOT=$ndk
 
-version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
-IFS=. read -r major minor patch <<<"${version%%-*}"
-version_code=$((major * 10000 + minor * 100 + patch))
+# The release identity, r<commit count> (scripts/build-number); the release
+# workflow sets it, local builds are marked -local.
+export HUSHJAR_VERSION="${HUSHJAR_VERSION:-$(scripts/build-number local)}"
+version=$HUSHJAR_VERSION
+# The version code must be a rising number: 66 for r0066.
+number=$(sed -n 's/^r0*\([0-9][0-9]*\).*/\1/p' <<<"$version")
+version_code=${number:-0}
 
 work=target/android-apk/$profile
 rm -rf "$work"

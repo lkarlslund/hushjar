@@ -507,7 +507,7 @@ pub struct Client {
 
 impl Client {
     pub fn new(server: Server) -> Self {
-        let user_agent = format!("Hushjar/{}", env!("CARGO_PKG_VERSION"));
+        let user_agent = format!("Hushjar/{}", crate::VERSION);
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(60)))
             .http_status_as_error(false)

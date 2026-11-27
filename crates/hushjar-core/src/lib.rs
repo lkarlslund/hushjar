@@ -18,3 +18,11 @@ pub mod totp;
 pub mod vault;
 pub mod webauthn;
 pub mod wordlist;
+
+/// The release identity, `r<commit count>` such as `r0066`, set through
+/// `HUSHJAR_VERSION` by the release workflow and the packaging scripts
+/// (scripts/build-number). A plain `cargo build` says `dev`.
+pub const VERSION: &str = match option_env!("HUSHJAR_VERSION") {
+    Some(v) => v,
+    None => "dev",
+};

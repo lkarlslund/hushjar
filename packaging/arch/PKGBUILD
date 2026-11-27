@@ -1,7 +1,8 @@
 # Arch Linux package for Hushjar. scripts/package-arch.sh builds it from the
-# working tree; for a release the source is the tagged tarball from GitHub.
+# working tree and sets pkgver; on its own it builds the release tag pkgver
+# (r<commit count>, see scripts/build-number) from GitHub.
 pkgname=hushjar
-pkgver=0.1.0
+pkgver=r0066
 pkgrel=1
 pkgdesc='A desktop app for your secrets: a Bitwarden and Vaultwarden client'
 arch=('x86_64' 'aarch64')
@@ -16,7 +17,7 @@ makedepends=('cargo')
 optdepends=('polkit: unlock with the computer password or fingerprint'
             'openssh: ssh-add and ssh to use the vault keys through the agent')
 options=('!lto' '!debug')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 prepare() {
@@ -29,6 +30,7 @@ build() {
     cd "$pkgname-$pkgver"
     export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
+    export HUSHJAR_VERSION="${HUSHJAR_VERSION:-$pkgver}"
     cargo build --frozen --release -p hushjar
 }
 

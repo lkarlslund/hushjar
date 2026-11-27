@@ -409,7 +409,7 @@ fn connect(shared: &Shared, hub: &str, token: &str) -> Result<(Socket, Vec<u8>),
     request.headers_mut().insert("Authorization", auth);
     request.headers_mut().insert(
         "User-Agent",
-        HeaderValue::from_str(&format!("Hushjar/{}", env!("CARGO_PKG_VERSION")))?,
+        HeaderValue::from_str(&format!("Hushjar/{}", crate::VERSION))?,
     );
     let uri = request.uri();
     let host = uri

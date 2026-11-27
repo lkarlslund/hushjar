@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Lists the files a rolling release carries, for the given tag (r0066): the
+# packages the release workflow builds, each with a .sha256 file. The
+# workflow uses it to see whether a release is complete.
+set -euo pipefail
+tag="${1:?usage: $0 <tag>}"
+packages=(
+    "hushjar-${tag}-linux-amd64.tar.gz"
+    "hushjar-${tag}-linux-arm64.tar.gz"
+    "hushjar-${tag}-windows-amd64.zip"
+    "hushjar-${tag}-windows-arm64.zip"
+    "hushjar-${tag}-macos-amd64.zip"
+    "hushjar-${tag}-macos-arm64.zip"
+    "hushjar-${tag}-ubuntu24.04-amd64.deb"
+    "hushjar-${tag}-ubuntu24.04-arm64.deb"
+    "hushjar-${tag}-ubuntu26.04-amd64.deb"
+    "hushjar-${tag}-ubuntu26.04-arm64.deb"
+    "hushjar-${tag}-1-x86_64.pkg.tar.zst"
+)
+for p in "${packages[@]}"; do
+    printf '%s\n%s.sha256\n' "$p" "$p"
+done

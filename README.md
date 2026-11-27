@@ -77,12 +77,13 @@ buttons move into a menu.
   X11, OpenGL/EGL headers) and libudev for security keys; see
   `.github/workflows/ci.yml` for the Debian package names.
   `scripts/package-linux.sh` builds a release and writes
-  `dist/hushjar-<version>-linux-<arch>.tar.gz`, laid out as a prefix.
+  `dist/hushjar-<version>-linux-<arch>.tar.gz` (amd64 or arm64), laid out
+  as a prefix.
 - **Ubuntu packages:** `scripts/package-deb.sh`, run on the Ubuntu release
-  the package is for, writes `dist/hushjar_<version>-1~ubuntu<release>_<arch>.deb`
+  the package is for, writes `dist/hushjar-<version>-ubuntu<release>-<arch>.deb`
   with cargo-deb (`cargo install cargo-deb`). Releases carry packages for
   24.04 and 26.04 on amd64 and arm64. Install with
-  `sudo apt install ./hushjar_….deb`, which also installs the polkit action
+  `sudo apt install ./hushjar-….deb`, which also installs the polkit action
   for unlocking with system authentication.
 - **Arch Linux:** `scripts/package-arch.sh` packs the committed tree and runs
   makepkg on `packaging/arch/PKGBUILD`, writing
@@ -90,10 +91,10 @@ buttons move into a menu.
   `sudo pacman -U`. Releases carry the x86_64 package.
 - **Windows:** needs the MSVC build tools (Visual Studio Build Tools with the
   C++ workload). `scripts/package-windows.ps1` writes
-  `dist\hushjar-<version>-windows-<arch>.zip` (x86_64 or aarch64); the icon is embedded in
-  `hushjar.exe` by the build.
+  `dist\hushjar-<version>-windows-<arch>.zip` (amd64 or arm64); the icon
+  and version are embedded in `hushjar.exe` by the build.
 - **macOS:** needs the Xcode command line tools. `scripts/package-macos.sh`
-  writes `dist/Hushjar-<version>-macos-<arch>.zip` containing `Hushjar.app`,
+  writes `dist/hushjar-<version>-macos-<arch>.zip` containing `Hushjar.app`,
   signed ad hoc only (Gatekeeper asks on first launch).
 - **Android:** needs the Rust targets (`rustup target add aarch64-linux-android
   x86_64-linux-android`), an Android SDK with a platform and build tools, the
@@ -109,8 +110,15 @@ buttons move into a menu.
 - `scripts/make-icons.sh` regenerates the committed `.ico`, `.icns` and Android
   launcher icons from `packaging/linux/io.github.lkarlslund.Hushjar.svg`.
 
-Pushing a tag `v*` makes the release workflow build all three packages and
-attach them to a draft GitHub release.
+Versions are `r<number of commits>`, such as `r0066`, from
+`scripts/build-number`; the packaging scripts mark local builds `-local`
+(and `-dirty` with uncommitted changes), and a plain `cargo build` says
+`dev`. Package formats that need a number use the number alone (66). Twice a
+day (00:17 and 12:17 UTC), if `main` has changed since the last release, the
+rolling release workflow runs all of CI, builds every package above except
+Android, and publishes them with `.sha256` files as a GitHub release named
+after the version, with the commits since the last release as its
+changelog. Run it by hand from the Actions tab to release sooner.
 
 To show Hushjar with its name and icon in Linux desktops, build a release and
 install its desktop entry for your user:

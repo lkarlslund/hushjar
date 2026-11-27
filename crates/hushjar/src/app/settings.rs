@@ -66,7 +66,7 @@ pub(super) fn render_settings(win: &AppWindow, st: &Shared) {
         .into(),
     );
     data.set_policy_note(policy_note(&state).into());
-    data.set_version(env!("CARGO_PKG_VERSION").into());
+    data.set_version(hushjar_core::VERSION.into());
     let accounts: Vec<AccountSecurity> = state
         .accounts
         .iter()
