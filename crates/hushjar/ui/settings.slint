@@ -1,4 +1,4 @@
-import { ScrollView, LineEdit } from "std-widgets.slint";
+import { ScrollView, LineEdit, AboutSlint } from "std-widgets.slint";
 import { Theme, Icons } from "theme.slint";
 import { Icon, ActionButton, Avatar, Segmented, Toggle, Picker } from "widgets.slint";
 import { Card, Row, Hint, PaneTitle } from "cards.slint";
@@ -337,8 +337,13 @@ export component SettingsPane inherits Rectangle {
             }
 
             Hint {
-                text: "Hushjar " + SettingsData.version;
+                text: "Hushjar " + SettingsData.version + ", MIT licence";
                 horizontal-alignment: center;
+            }
+            // Slint's royalty-free licence asks for this in the About section.
+            HorizontalLayout {
+                alignment: center;
+                AboutSlint { max-width: 200px; }
             }
         }
     }

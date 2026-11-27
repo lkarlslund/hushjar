@@ -134,3 +134,16 @@ main states (only Hushjar's own window is captured):
 HUSHJAR_DATA_DIR=/tmp/hushjar-demo HUSHJAR_SNAPSHOT_DIR=/tmp/hushjar-shots \
   HUSHJAR_SNAPSHOT_PASSWORD='hushjar demo password' cargo run -p hushjar --features snapshot
 ```
+
+## Licence
+
+Hushjar is released under the [MIT licence](LICENSE).
+
+[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev)
+
+The interface is built with [Slint](https://slint.dev), used under the
+[Slint Royalty-free Desktop, Mobile, and Web Applications License
+2.0](https://github.com/slint-ui/slint/blob/master/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md);
+the settings pane shows its "About Slint" panel. The passphrase word list is
+the EFF large word list (CC BY 3.0 US, see
+`crates/hushjar-core/src/wordlist/NOTICE.md`).
