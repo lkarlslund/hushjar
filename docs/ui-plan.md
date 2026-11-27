@@ -383,8 +383,9 @@ Every milestone from M0 to M5 is built. What is tested and what is not:
   - Azure uploads, which bitwarden.com uses for files;
   - the polkit dialog for system authentication (install the rule first; see
     `scripts/install-desktop.sh`);
-  - Windows and macOS: they cross-check, but they have never been built or
-    run there, and CI has not run yet.
+  - Windows and macOS by hand: CI builds and tests both (x86_64 and arm64,
+    like Linux), but nobody has run the app on them yet. The same goes for
+    the Ubuntu and Arch packages beyond installing them in a container.
 - **Platform gaps:**
   - The tray, start on login, notifications and system authentication are
     Linux only. Windows Hello and Touch ID are not done.
