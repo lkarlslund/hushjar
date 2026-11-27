@@ -178,14 +178,17 @@ fn imports_pkcs8_from_openssl() {
             let expected = String::from_utf8(out.stdout).unwrap();
             assert_eq!(key.public_key, expected.trim());
         } else {
-            // macOS's ssh-keygen is built against LibreSSL, which cannot read
-            // Ed25519 keys in PKCS#8 files; Linux CI still checks this case.
+            // Many ssh-keygen builds (macOS's, Ubuntu 24.04's) cannot read
+            // Ed25519 keys in PKCS#8 files; newer ones (as on Arch) check it.
+            let stderr = String::from_utf8_lossy(&out.stderr);
             assert!(
-                cfg!(target_os = "macos") && name == "p8-ed",
-                "ssh-keygen -y {name}: {}",
-                String::from_utf8_lossy(&out.stderr)
+                name == "p8-ed" && stderr.contains("invalid format"),
+                "ssh-keygen -y {name}: {stderr}"
             );
-            println!("skipping the ssh-keygen check for {name} on macOS");
+            println!(
+                "skipping the ssh-keygen check for {name}: {}",
+                stderr.trim()
+            );
         }
 
         let enc = dir().join(format!("{name}-enc"));

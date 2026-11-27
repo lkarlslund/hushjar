@@ -32,6 +32,7 @@
 
 use std::io::{self, ErrorKind};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -129,6 +130,10 @@ struct Shared {
     running: Mutex<bool>,
     wake: Condvar,
     status: Mutex<Status>,
+    /// True while the thread is opening the TCP connection. There is nothing
+    /// to close yet, so `stop` need not wait (on Windows a refused connect
+    /// takes about two seconds).
+    connecting: AtomicBool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -208,6 +213,7 @@ impl Listener {
             running: Mutex::new(true),
             wake: Condvar::new(),
             status: Mutex::new(Status::default()),
+            connecting: AtomicBool::new(false),
         });
         let (finished_tx, finished) = mpsc::channel();
         let hub = hub_url(&server.notifications());
@@ -242,7 +248,7 @@ impl Listener {
 
     /// Stops listening. No event is delivered after this returns. Waits up to
     /// two seconds for the thread to close the connection; a thread still
-    /// stuck in a (time-limited) connect is left to end on its own.
+    /// opening one (a time-limited connect) is left to end on its own.
     pub fn stop(mut self) {
         self.shutdown();
     }
@@ -259,6 +265,10 @@ impl Listener {
         let Some(thread) = self.thread.take() else {
             return;
         };
+        if self.shared.connecting.load(Ordering::SeqCst) {
+            drop(thread);
+            return;
+        }
         match self.finished.recv_timeout(STOP_WAIT) {
             Err(RecvTimeoutError::Timeout) => drop(thread),
             _ => {
@@ -416,10 +426,12 @@ fn connect(shared: &Shared, hub: &str, token: &str) -> Result<(Socket, Vec<u8>),
             80
         });
     let addresses: Vec<SocketAddr> = (host.as_str(), port).to_socket_addrs()?.collect();
+    shared.connecting.store(true, Ordering::SeqCst);
     let stream = addresses
         .iter()
-        .find_map(|address| TcpStream::connect_timeout(address, CONNECT_TIMEOUT).ok())
-        .ok_or_else(|| ConnectError::Failed("could not connect".into()))?;
+        .find_map(|address| TcpStream::connect_timeout(address, CONNECT_TIMEOUT).ok());
+    shared.connecting.store(false, Ordering::SeqCst);
+    let stream = stream.ok_or_else(|| ConnectError::Failed("could not connect".into()))?;
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(TICK))?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
@@ -887,6 +899,23 @@ mod tests {
         listener.stop();
         assert!(started.elapsed() < Duration::from_millis(500));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn stops_promptly_while_connecting() {
+        // A documentation address (RFC 5737) that nothing answers: the
+        // connect hangs, as a refused one does on Windows, or fails at once
+        // where there is no route.
+        let listener = Listener::start(
+            &Server::parse("https://192.0.2.1:9").unwrap(),
+            "d",
+            || Some(Zeroizing::new("token".to_string())),
+            |_| {},
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        let started = Instant::now();
+        listener.stop();
+        assert!(started.elapsed() < Duration::from_millis(500));
     }
 
     #[test]
