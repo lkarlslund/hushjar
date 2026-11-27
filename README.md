@@ -78,6 +78,16 @@ buttons move into a menu.
   `.github/workflows/ci.yml` for the Debian package names.
   `scripts/package-linux.sh` builds a release and writes
   `dist/hushjar-<version>-linux-<arch>.tar.gz`, laid out as a prefix.
+- **Ubuntu packages:** `scripts/package-deb.sh`, run on the Ubuntu release
+  the package is for, writes `dist/hushjar_<version>-1~ubuntu<release>_<arch>.deb`
+  with cargo-deb (`cargo install cargo-deb`). Releases carry packages for
+  24.04 and 26.04 on amd64 and arm64. Install with
+  `sudo apt install ./hushjar_….deb`, which also installs the polkit action
+  for unlocking with system authentication.
+- **Arch Linux:** `scripts/package-arch.sh` packs the committed tree and runs
+  makepkg on `packaging/arch/PKGBUILD`, writing
+  `dist/hushjar-<version>-1-<arch>.pkg.tar.zst`; install it with
+  `sudo pacman -U`. Releases carry the x86_64 package.
 - **Windows:** needs the MSVC build tools (Visual Studio Build Tools with the
   C++ workload). `scripts/package-windows.ps1` writes
   `dist\hushjar-<version>-windows-<arch>.zip` (x86_64 or aarch64); the icon is embedded in

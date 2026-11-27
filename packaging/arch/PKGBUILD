@@ -1,0 +1,44 @@
+# Arch Linux package for Hushjar. scripts/package-arch.sh builds it from the
+# working tree; for a release the source is the tagged tarball from GitHub.
+pkgname=hushjar
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='A desktop app for your secrets: a Bitwarden and Vaultwarden client'
+arch=('x86_64' 'aarch64')
+url='https://github.com/lkarlslund/hushjar'
+license=('MIT')
+# Linked: glibc, gcc-libs, fontconfig, systemd-libs (libudev). Loaded at run
+# time: Wayland, X11, OpenGL/EGL (libglvnd), xkbcommon and D-Bus.
+depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs' 'hicolor-icon-theme'
+         'wayland' 'libglvnd' 'libxkbcommon' 'libxkbcommon-x11' 'libx11'
+         'libxcb' 'libxcursor' 'libxi' 'libxrender' 'dbus')
+makedepends=('cargo')
+optdepends=('polkit: unlock with the computer password or fingerprint'
+            'openssh: ssh-add and ssh to use the vault keys through the agent')
+options=('!lto' '!debug')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release -p hushjar
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    local id=io.github.lkarlslund.Hushjar
+    install -Dm0755 target/release/hushjar "$pkgdir/usr/bin/hushjar"
+    install -Dm0644 "packaging/linux/$id.desktop" "$pkgdir/usr/share/applications/$id.desktop"
+    install -Dm0644 "packaging/linux/$id.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$id.svg"
+    install -Dm0644 "packaging/linux/$id.policy" "$pkgdir/usr/share/polkit-1/actions/$id.policy"
+    install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

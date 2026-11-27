@@ -1,11 +1,14 @@
 name: Release
 
 # Pushing a tag such as v0.1.0 builds the Linux tarball, the Windows zip and
-# the macOS app, each for x86_64 and arm64, and attaches them to a draft
-# GitHub release to review and publish by hand.
+# the macOS app, each for x86_64 and arm64, Ubuntu packages for 24.04 and
+# 26.04 (amd64 and arm64) and an Arch Linux package (x86_64), and attaches
+# them to a draft GitHub release to review and publish by hand. Running it by
+# hand (workflow_dispatch) builds everything without making a release.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -89,8 +92,71 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  deb:
+    name: Ubuntu ${{ matrix.release }} ${{ matrix.arch }} package
+    strategy:
+      matrix:
+        release: ["24.04", "26.04"]
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    container: ubuntu:${{ matrix.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install build tools and libraries
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential curl ca-certificates pkg-config dpkg-dev \
+            libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libxcb1-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libxcursor-dev libxrandr-dev libxi-dev libudev-dev
+      - name: Install Rust and cargo-deb
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/cargo" install cargo-deb --locked --version "$CARGO_DEB_VERSION"
+        env:
+          CARGO_DEB_VERSION: "3.8.0"
+      - run: scripts/package-deb.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deb-${{ matrix.release }}-${{ matrix.arch }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  arch:
+    name: Arch Linux package
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    steps:
+      - name: Install git, Rust and the build libraries
+        run: |
+          pacman -Syu --noconfirm --needed git rust fontconfig systemd-libs \
+            wayland libglvnd libxkbcommon libxkbcommon-x11 libx11 libxcb \
+            libxcursor libxi libxrender dbus hicolor-icon-theme
+      # git must be installed first, so checkout makes a real clone for
+      # git archive.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build as an ordinary user (makepkg refuses root)
+        run: |
+          useradd -m builder
+          chown -R builder: .
+          su builder -c "git config --global --add safe.directory '$PWD' && scripts/package-arch.sh"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arch
+          path: dist/*.pkg.tar.zst
+          if-no-files-found: error
+
   draft-release:
-    needs: [linux, windows, macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows, macos, deb, arch]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

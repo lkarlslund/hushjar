@@ -19,6 +19,28 @@ path = "src/lib.rs"
 name = "hushjar"
 path = "src/main.rs"
 
+# Ubuntu packages, built with cargo-deb by scripts/package-deb.sh. `$auto`
+# finds the libraries the binary links; the rest are the ones it loads at run
+# time (Wayland, X11, OpenGL/EGL, xkbcommon, D-Bus), which no tool can see.
+[package.metadata.deb]
+maintainer = "Lars Karlslund <lkarlslund@users.noreply.github.com>"
+copyright = "2026 Lars Karlslund"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Hushjar is a desktop client for Bitwarden and self-hosted Vaultwarden \
+accounts: it keeps an offline copy of the vault, fills the clipboard, \
+generates passwords and serves the vault's SSH keys as an SSH agent."""
+section = "utils"
+priority = "optional"
+depends = "$auto, libegl1, libgl1, libwayland-client0, libwayland-egl1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxi6, libxrender1, libdbus-1-3"
+assets = [
+    ["target/release/hushjar", "usr/bin/", "755"],
+    ["../../packaging/linux/io.github.lkarlslund.Hushjar.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/linux/io.github.lkarlslund.Hushjar.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["../../packaging/linux/io.github.lkarlslund.Hushjar.policy", "usr/share/polkit-1/actions/", "644"],
+    ["../../README.md", "usr/share/doc/hushjar/", "644"],
+]
+
 [dependencies]
 getrandom = "0.4"
 hushjar-agent = { version = "0.1.0", path = "../hushjar-agent" }
