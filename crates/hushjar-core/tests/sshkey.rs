@@ -1,5 +1,7 @@
 //! Cross-checks the SSH key module against the real OpenSSH and OpenSSL tools.
-//! Each test prints a note and passes when a tool is missing.
+//! Each test prints a note and passes when a tool is missing. Unix only: the
+//! tests set file permissions the way ssh-keygen insists on.
+#![cfg(unix)]
 
 use hushjar_core::sshkey::{self, Algorithm, SshKeyError};
 use std::path::{Path, PathBuf};
@@ -167,8 +169,24 @@ fn imports_pkcs8_from_openssl() {
             std::fs::Permissions::from_mode(0o600)
         })
         .unwrap();
-        let expected = run(Command::new("ssh-keygen").args(["-y", "-f"]).arg(&plain));
-        assert_eq!(key.public_key, expected.trim());
+        let out = Command::new("ssh-keygen")
+            .args(["-y", "-f"])
+            .arg(&plain)
+            .output()
+            .expect("run ssh-keygen");
+        if out.status.success() {
+            let expected = String::from_utf8(out.stdout).unwrap();
+            assert_eq!(key.public_key, expected.trim());
+        } else {
+            // macOS's ssh-keygen is built against LibreSSL, which cannot read
+            // Ed25519 keys in PKCS#8 files; Linux CI still checks this case.
+            assert!(
+                cfg!(target_os = "macos") && name == "p8-ed",
+                "ssh-keygen -y {name}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            println!("skipping the ssh-keygen check for {name} on macOS");
+        }
 
         let enc = dir().join(format!("{name}-enc"));
         run(Command::new("openssl")

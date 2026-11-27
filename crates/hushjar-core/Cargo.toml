@@ -48,6 +48,12 @@ ureq = { version = "3.5.2", features = ["json"] }
 uuid = { version = "1.29.3", features = ["v4"] }
 zeroize = { version = "1.9.2", features = ["derive"] }
 
+# authenticator 0.5 passes std's raw handles where winapi's own c_void is
+# expected, which only compiles when winapi's "std" feature makes the two the
+# same type.
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.9", features = ["std"] }
+
 [dev-dependencies]
 # A software authenticator for the WebAuthn interop test.
 p256 = { version = "0.14.0", features = ["ecdsa"] }
