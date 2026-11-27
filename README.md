@@ -2,10 +2,9 @@
 
 A desktop app for your secrets, written in Rust with [Slint](https://slint.dev).
 It works with Bitwarden and self-hosted Vaultwarden accounts. Linux on Wayland
-is the primary target. Windows and macOS builds and a CI workflow are set up,
-but neither has been built or run on those systems yet. An early Android build
-runs in the emulator. It
-replaces VaultGoblin, an earlier Go and Wails client.
+is the primary target. CI builds and tests Linux, Windows and macOS, each on
+x86_64 and arm64; the Windows and macOS builds have not been tried by hand
+yet. An early Android build runs in the emulator. It replaces VaultGoblin, an earlier Go and Wails client.
 
 The plan, including a checklist of Bitwarden features, is in
 [docs/ui-plan.md](docs/ui-plan.md).
@@ -79,7 +78,7 @@ buttons move into a menu.
   `dist/hushjar-<version>-linux-<arch>.tar.gz`, laid out as a prefix.
 - **Windows:** needs the MSVC build tools (Visual Studio Build Tools with the
   C++ workload). `scripts/package-windows.ps1` writes
-  `dist\hushjar-<version>-windows-x86_64.zip`; the icon is embedded in
+  `dist\hushjar-<version>-windows-<arch>.zip` (x86_64 or aarch64); the icon is embedded in
   `hushjar.exe` by the build.
 - **macOS:** needs the Xcode command line tools. `scripts/package-macos.sh`
   writes `dist/Hushjar-<version>-macos-<arch>.zip` containing `Hushjar.app`,

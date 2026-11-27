@@ -83,13 +83,48 @@ jobs:
       - name: Interop tests (invented accounts on the throwaway server)
         run: cargo test -p hushjar-core --test interop --locked -- --test-threads=1
 
-  windows:
-    name: Windows (build, tests)
-    runs-on: windows-2025
+  linux-arm64:
+    name: Linux arm64 (build, tests)
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install system libraries for Slint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libxcb1-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libxcursor-dev libxrandr-dev libxi-dev openssh-client
+      - name: Install Rust
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update && rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo build --workspace --all-targets --locked
+      - run: cargo test --workspace --locked
+
+  windows:
+    name: Windows ${{ matrix.arch }} (build, tests)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: windows-2025 }
+          - { arch: arm64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install rustup if the runner has none
+        shell: pwsh
+        run: scripts/ci-install-rustup.ps1
       - name: Install Rust
         shell: bash
         run: rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update && rustup default "$RUST_VERSION"
@@ -98,8 +133,14 @@ jobs:
       - run: cargo test --workspace --locked
 
   macos:
-    name: macOS (build, tests)
-    runs-on: macos-15
+    name: macOS ${{ matrix.arch }} (build, tests)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64, runner: macos-15 }
+          - { arch: x86_64, runner: macos-15-intel }
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

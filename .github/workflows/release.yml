@@ -1,8 +1,8 @@
 name: Release
 
 # Pushing a tag such as v0.1.0 builds the Linux tarball, the Windows zip and
-# the macOS app, and attaches them to a draft GitHub release to review and
-# publish by hand.
+# the macOS app, each for x86_64 and arm64, and attaches them to a draft
+# GitHub release to review and publish by hand.
 on:
   push:
     tags: ["v*"]
@@ -16,7 +16,10 @@ env:
 
 jobs:
   linux:
-    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,21 +32,33 @@ jobs:
             libwayland-dev libx11-dev libxcb1-dev libgl1-mesa-dev libegl1-mesa-dev \
             libxcursor-dev libxrandr-dev libxi-dev
       - name: Install Rust
-        run: rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update && rustup default "$RUST_VERSION"
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update && rustup default "$RUST_VERSION"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: scripts/package-linux.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: linux
+          name: linux-${{ matrix.runner }}
           path: dist/*.tar.gz
           if-no-files-found: error
 
   windows:
-    runs-on: windows-2025
+    strategy:
+      matrix:
+        runner: [windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install rustup if the runner has none
+        shell: pwsh
+        run: scripts/ci-install-rustup.ps1
       - name: Install Rust
         shell: bash
         run: rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update && rustup default "$RUST_VERSION"
@@ -51,12 +66,15 @@ jobs:
       - run: scripts/package-windows.ps1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: windows
+          name: windows-${{ matrix.runner }}
           path: dist/*.zip
           if-no-files-found: error
 
   macos:
-    runs-on: macos-15
+    strategy:
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,7 +85,7 @@ jobs:
       - run: scripts/package-macos.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: macos
+          name: macos-${{ matrix.runner }}
           path: dist/*.zip
           if-no-files-found: error
 

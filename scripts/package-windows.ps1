@@ -1,4 +1,4 @@
-# Builds a release and packs it as dist\hushjar-<version>-windows-x86_64.zip
+# Builds a release and packs it as dist\hushjar-<version>-windows-<arch>.zip
 # with hushjar.exe, whose icon is embedded by the build. Run from PowerShell.
 # Pass -NoBuild to pack an existing target\release build.
 param([switch]$NoBuild)
@@ -6,7 +6,10 @@ $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' |
     Select-Object -First 1).Matches[0].Groups[1].Value
-$name = "hushjar-$version-windows-x86_64"
+# The architecture of the Rust toolchain, which is what the build targets:
+# x86_64 or aarch64.
+$arch = ((rustc -vV | Select-String '^host: (\w+)-').Matches[0].Groups[1].Value)
+$name = "hushjar-$version-windows-$arch"
 
 if (-not $NoBuild) {
     cargo build --release --locked -p hushjar
