@@ -17,7 +17,8 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 sed "s/^pkgver=.*/pkgver=$pkgver/" packaging/arch/PKGBUILD >"$work/PKGBUILD"
 git archive --format=tar.gz --prefix="hushjar-$pkgver/" -o "$work/hushjar-$pkgver.tar.gz" HEAD
-(cd "$work" && PKGDEST="$work/out" makepkg --noconfirm --cleanbuild)
+# PKGEXT: Arch Linux ARM's makepkg.conf would make .pkg.tar.xz.
+(cd "$work" && PKGDEST="$work/out" PKGEXT=.pkg.tar.zst makepkg --noconfirm --cleanbuild)
 mkdir -p dist
 cp "$work"/out/*.pkg.tar.zst dist/
 ls dist/*.pkg.tar.zst

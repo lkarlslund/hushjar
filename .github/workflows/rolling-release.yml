@@ -3,7 +3,7 @@ name: Rolling release
 # Twice a day, if main has changed since the last release: runs the whole of
 # CI, then builds the Linux tarball, the Windows zip and the macOS app (each
 # for amd64 and arm64), Ubuntu packages for 24.04 and 26.04 (amd64 and arm64)
-# and an Arch Linux package (x86_64), and publishes them with .sha256 files as
+# and Arch Linux packages (x86_64 and aarch64), and publishes them with .sha256 files as
 # release r<commit count> (scripts/build-number), with the commits since the
 # last release as its changelog. A release that is missing files is rebuilt
 # in place (scripts/release-assets lists them).
@@ -254,33 +254,30 @@ jobs:
           if-no-files-found: error
 
   arch:
-    name: Arch Linux package
+    name: Arch Linux ${{ matrix.arch }} package
     needs: [meta, tests]
     if: needs.meta.outputs.changed == 'true'
-    runs-on: ubuntu-24.04
-    container: archlinux:base-devel
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     env:
       HUSHJAR_VERSION: ${{ needs.meta.outputs.tag }}
     steps:
-      - name: Install git, Rust and the build libraries
-        run: |
-          pacman -Syu --noconfirm --needed git rust fontconfig systemd-libs \
-            wayland libglvnd libxkbcommon libxkbcommon-x11 libx11 libxcb \
-            libxcursor libxi libxrender dbus hicolor-icon-theme
-      # git must be installed first, so checkout makes a real clone for
-      # git archive.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # su starts a clean environment, so the version is passed on.
-      - name: Build as an ordinary user (makepkg refuses root)
-        run: |
-          useradd -m builder
-          chown -R builder: .
-          su builder -c "git config --global --add safe.directory '$PWD' && HUSHJAR_VERSION='$HUSHJAR_VERSION' scripts/package-arch.sh"
+      - name: Prepare the Arch Linux image
+        run: scripts/ci-arch-image.sh
+      - name: Build the package in it
+        run: docker run --rm -v "$PWD:/src" -w /src -e HUSHJAR_VERSION hushjar-arch-build bash scripts/ci-arch-package.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: pkg-arch
+          name: pkg-arch-${{ matrix.arch }}
           path: dist/*.pkg.tar.zst
           if-no-files-found: error
 

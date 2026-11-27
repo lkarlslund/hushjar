@@ -16,6 +16,7 @@ packages=(
     "hushjar-${tag}-ubuntu26.04-amd64.deb"
     "hushjar-${tag}-ubuntu26.04-arm64.deb"
     "hushjar-${tag}-1-x86_64.pkg.tar.zst"
+    "hushjar-${tag}-1-aarch64.pkg.tar.zst"
 )
 for p in "${packages[@]}"; do
     printf '%s\n%s.sha256\n' "$p" "$p"

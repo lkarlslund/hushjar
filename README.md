@@ -88,7 +88,8 @@ buttons move into a menu.
 - **Arch Linux:** `scripts/package-arch.sh` packs the committed tree and runs
   makepkg on `packaging/arch/PKGBUILD`, writing
   `dist/hushjar-<version>-1-<arch>.pkg.tar.zst`; install it with
-  `sudo pacman -U`. Releases carry the x86_64 package.
+  `sudo pacman -U`. Releases carry packages for x86_64 and aarch64 (built on
+  Arch Linux ARM).
 - **Windows:** needs the MSVC build tools (Visual Studio Build Tools with the
   C++ workload). `scripts/package-windows.ps1` writes
   `dist\hushjar-<version>-windows-<arch>.zip` (amd64 or arm64); the icon
